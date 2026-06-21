@@ -500,19 +500,34 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         }
     }
 
+    private var startleTrack: AudioTrack? = null
+
     private fun playSineTone(freqHz: Float, durationMs: Int) {
+        // 释放上一次的 track
+        val old = startleTrack
+        startleTrack = null
+        try {
+            old?.stop()
+            old?.flush()
+            old?.release()
+        } catch (_: Throwable) {}
+
         val sr = SAMPLE_RATE
         val n = (sr * durationMs / 1000).toInt().coerceIn(1024, 4 * sr)
         val samples = ShortArray(n)
         val fade = (sr * 0.02).toInt().coerceAtLeast(128)
+        // 800Hz 主音 + 1760Hz 泛音，手机扬声器更易播放
+        val f1 = freqHz.coerceAtLeast(200f).coerceAtMost(2000f)
+        val f2 = (freqHz * 2.2f).coerceAtLeast(400f).coerceAtMost(4000f)
         for (i in 0 until n) {
+            val t = i.toDouble() / sr
             val env = when {
                 i < fade -> i.toDouble() / fade
                 i > n - fade -> (n - i).toDouble() / fade
                 else -> 1.0
             }
-            val v = sin(2.0 * PI * freqHz * i / sr) * env
-            samples[i] = (v * 16000.0).toInt().coerceIn(-32767, 32767).toShort()
+            val v = (sin(2.0 * PI * f1 * t) + 0.5 * sin(2.0 * PI * f2 * t)) * env * 0.55
+            samples[i] = (v * 28000.0).toInt().coerceIn(-32767, 32767).toShort()
         }
 
         val track: AudioTrack = try {
@@ -520,7 +535,7 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 sr,
                 AudioFormat.CHANNEL_OUT_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
-            ).coerceAtLeast(n * 2) * 2
+            ).coerceAtLeast(n * 2)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 AudioTrack.Builder()
                     .setAudioAttributes(
@@ -537,7 +552,7 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                             .build(),
                     )
                     .setBufferSizeInBytes(bufSize)
-                    .setTransferMode(AudioTrack.MODE_STATIC)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
                     .build()
             } else {
                 @Suppress("DEPRECATION")
@@ -547,19 +562,36 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                     AudioFormat.CHANNEL_OUT_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
                     bufSize,
-                    AudioTrack.MODE_STATIC,
+                    AudioTrack.MODE_STREAM,
                 )
             }
         } catch (t: Throwable) {
             Log.e(TAG, "AudioTrack create failed", t)
             return
         }
-        try {
-            track.write(samples, 0, samples.size)
-            track.play()
-        } catch (t: Throwable) {
-            Log.e(TAG, "AudioTrack play failed", t)
-        }
+        track.setStereoVolume(AudioTrack.getMaxVolume(), AudioTrack.getMaxVolume())
+        startleTrack = track
+
+        // 独立线程分块写入，避免被 GC 提前回收 & 不阻塞主线程
+        Thread {
+            try {
+                track.play()
+                val chunk = 4096
+                var offset = 0
+                while (offset < samples.size) {
+                    val count = kotlin.math.min(chunk, samples.size - offset)
+                    track.write(samples, offset, count)
+                    offset += count
+                }
+                Thread.sleep(100)
+                try { track.stop(); track.flush(); track.release() } catch (_: Throwable) {}
+                if (startleTrack === track) startleTrack = null
+            } catch (t: Throwable) {
+                Log.e(TAG, "AudioTrack play thread failed", t)
+                try { track.release() } catch (_: Throwable) {}
+                if (startleTrack === track) startleTrack = null
+            }
+        }.apply { priority = Thread.MAX_PRIORITY }.start()
     }
 
     private fun vibrateMedium() {

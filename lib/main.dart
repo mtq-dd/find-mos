@@ -336,7 +336,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     try {
       await _methodChannel.invokeMethod<bool>(
         'playStartleTone',
-        <String, dynamic>{'frequency': 350.0, 'durationMs': 1000},
+        <String, dynamic>{'frequency': 800.0, 'durationMs': 1000},
       );
     } on PlatformException catch (e) {
       debugPrint('playStartleTone error: $e');
