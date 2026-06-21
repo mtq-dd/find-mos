@@ -1,5 +1,3 @@
-library;
-
 import 'dart:typed_data';
 
 /// A rectangular motion region, in input pixel coordinates.
@@ -19,13 +17,7 @@ class MotionRect {
   });
 }
 
-/// Frame-differencing motion detector.
-///
-/// For each new luminance frame, the detector:
-/// 1. Marks pixels whose absolute difference with the previous frame exceeds
-///    [threshold].
-/// 2. Labels connected-components via a BFS flood-fill (4-connectivity).
-/// 3. Retains regions whose pixel area is in `[minArea, maxArea]`.
+/// Frame-differencing motion detector with BFS connected-component labeling.
 class MotionDetector {
   final int width;
   final int height;
@@ -80,7 +72,6 @@ class MotionDetector {
       for (var x = 0; x < width; x++) {
         final start = y * width + x;
         if (mask[start] != -1) continue;
-        // BFS
         var sp = 0;
         stack[sp++] = x;
         stack[sp++] = y;

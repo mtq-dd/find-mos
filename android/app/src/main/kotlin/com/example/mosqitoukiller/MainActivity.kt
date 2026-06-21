@@ -1,4 +1,4 @@
-package com.example.find_mos
+package com.example.mosqitoukiller
 
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine

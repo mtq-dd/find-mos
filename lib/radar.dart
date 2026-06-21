@@ -1,5 +1,3 @@
-library;
-
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -26,7 +24,11 @@ class RadarView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
-      painter: _RadarPainter(target: target, pulse: pulse, directionText: directionText),
+      painter: _RadarPainter(
+        target: target,
+        pulse: pulse,
+        directionText: directionText,
+      ),
       child: const SizedBox.expand(),
     );
   }
@@ -95,8 +97,11 @@ class _RadarPainter extends CustomPainter {
           : target.distance > 0.4
               ? Colors.orangeAccent
               : Colors.greenAccent;
-      canvas.drawCircle(Offset(tx, ty), dotRadius + 6,
-          Paint()..color = dotColor.withOpacity(0.15));
+      canvas.drawCircle(
+        Offset(tx, ty),
+        dotRadius + 6,
+        Paint()..color = dotColor.withOpacity(0.15),
+      );
       canvas.drawCircle(Offset(tx, ty), dotRadius, Paint()..color = dotColor);
     }
 

@@ -1,4 +1,4 @@
-package com.example.find_mos
+package com.example.mosqitoukiller
 
 import android.Manifest
 import android.content.Context
@@ -32,24 +32,19 @@ import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.sin
 
-private const val TAG = "FindMos"
+private const val TAG = "FindMosKt"
 
-private const val CHANNEL_METHOD = "com.example.find_mos/method"
-private const val CHANNEL_RADAR = "com.example.find_mos/radar"
-private const val CHANNEL_CAMERA = "com.example.find_mos/camera"
+private const val CHANNEL_METHOD = "com.example.mosqitoukiller/method"
+private const val CHANNEL_RADAR = "com.example.mosqitoukiller/radar"
+private const val CHANNEL_CAMERA = "com.example.mosqitoukiller/camera"
 
-// Audio constants
 private const val SAMPLE_RATE = 44100
 private const val FFT_SIZE = 1024
-
-// Mosquito wing beat band (Hz)
 private const val F_LOW = 300.0
 private const val F_HIGH = 600.0
-
-// Camera push resolution
 private const val CAM_WIDTH = 160
 private const val CAM_HEIGHT = 90
-private const val CAM_PERIOD_MS = 100L // ~10fps
+private const val CAM_PERIOD_MS = 100L
 
 class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
@@ -131,20 +126,16 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         val act = activity ?: return
         try {
             act.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-                val decorView = act.window?.decorView
-                if (decorView != null) {
-                    val flags = (
-                        android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                            or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                            or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                            or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                            or android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
-                            or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                    )
-                    decorView.systemUiVisibility = flags
-                }
-            }
+            val decorView = act.window?.decorView ?: return
+            val flags = (
+                android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    or android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
+                    or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            )
+            decorView.systemUiVisibility = flags
         } catch (t: Throwable) {
             Log.w(TAG, "applyImmersiveFlags failed", t)
         }
@@ -180,22 +171,10 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 vibrateMedium()
                 result.success(true)
             }
-            "keepScreenOn" -> {
-                val on = call.argument<Boolean>("on") ?: false
-                val act = activity
-                if (act != null) {
-                    if (on) act.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                    else act.window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                }
-                result.success(true)
-            }
             else -> result.notImplemented()
         }
     }
 
-    // ---------------------------------------------------------------------
-    // Radar
-    // ---------------------------------------------------------------------
     private fun startRadar(): Boolean {
         if (audioRunning) return true
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
@@ -209,7 +188,6 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, channelConfig, audioFormat)
         val bufSize = (minBuf * 4).coerceAtLeast(FFT_SIZE * 2 * 4)
 
-        // Try UNPROCESSED first, then VOICE_RECOGNITION, then MIC
         val audioSources = mutableListOf<Int>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             audioSources.add(MediaRecorder.AudioSource.UNPROCESSED)
@@ -281,7 +259,6 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         private val rightSamples = ShortArray(FFT_SIZE)
         private var fillIdx = 0
 
-        // For cross-correlation FFT
         private val ccXr = DoubleArray(FFT_SIZE)
         private val ccXi = DoubleArray(FFT_SIZE)
         private val ccYr = DoubleArray(FFT_SIZE)
@@ -293,7 +270,6 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
         override fun run() {
             if (!audioRunning) return
-            // Read ~256 sample pairs
             val samplesPerChannel = 256
             val bytes = ByteArray(samplesPerChannel * 2 * 2)
             var offset = 0
@@ -308,7 +284,6 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 offset += read
             }
 
-            // Deinterleave stereo PCM-16LE into sliding buffers
             var si = 0
             while (si < offset && fillIdx < FFT_SIZE) {
                 val l = (bytes[si].toInt() and 0xFF) or (bytes[si + 1].toInt() shl 8)
@@ -321,7 +296,6 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
             if (fillIdx >= FFT_SIZE) {
                 processFrame()
-                // Shift overlap: keep last 512 samples
                 leftSamples.copyInto(leftSamples, 0, FFT_SIZE / 2, FFT_SIZE)
                 rightSamples.copyInto(rightSamples, 0, FFT_SIZE / 2, FFT_SIZE)
                 fillIdx = FFT_SIZE / 2
@@ -415,7 +389,6 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                     bestIdx = k
                 }
             }
-            // Quadratic interpolation
             val idx0 = if (bestIdx - 1 >= 0) bestIdx - 1 else FFT_SIZE - 1
             val idx2 = if (bestIdx + 1 < FFT_SIZE) bestIdx + 1 else 0
             val a = ccRr[idx0]
@@ -428,7 +401,6 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
         private fun radix2FFT(re: DoubleArray, im: DoubleArray, inverse: Boolean) {
             val n = FFT_SIZE
-            // Bit-reversal
             var target = 0
             for (pos in 1 until n) {
                 var bitMask = n shr 1
@@ -442,27 +414,22 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                     val ti = im[pos]; im[pos] = im[target]; im[target] = ti
                 }
             }
-            // Butterfly
             var size = 2
             while (size <= n) {
                 val half = size shr 1
                 val angleStep = if (inverse) 2.0 * PI / size else -2.0 * PI / size
-                val baseWr = cos(angleStep)
-                val baseWi = sin(angleStep)
                 for (m in 0 until n step size) {
                     var wr = 1.0
                     var wi = 0.0
                     for (j in 0 until half) {
-                        val uIdx = m + j
-                        val vIdx = m + j + half
-                        val rr = wr * re[vIdx] - wi * im[vIdx]
-                        val ri = wr * im[vIdx] + wi * re[vIdx]
-                        re[vIdx] = re[uIdx] - rr
-                        im[vIdx] = im[uIdx] - ri
-                        re[uIdx] = re[uIdx] + rr
-                        im[uIdx] = im[uIdx] + ri
-                        val nwr = wr * baseWr - wi * baseWi
-                        val nwi = wr * baseWi + wi * baseWr
+                        val rr = wr * re[m + j + half] - wi * im[m + j + half]
+                        val ri = wr * im[m + j + half] + wi * re[m + j + half]
+                        re[m + j + half] = re[m + j] - rr
+                        im[m + j + half] = im[m + j] - ri
+                        re[m + j] = re[m + j] + rr
+                        im[m + j] = im[m + j] + ri
+                        val nwr = wr * cos(angleStep) - wi * sin(angleStep)
+                        val nwi = wr * sin(angleStep) + wi * cos(angleStep)
                         wr = nwr
                         wi = nwi
                     }
@@ -479,9 +446,6 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         }
     }
 
-    // ---------------------------------------------------------------------
-    // Torch
-    // ---------------------------------------------------------------------
     private fun setTorch(on: Boolean) {
         try {
             val cm = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager ?: return
@@ -509,9 +473,6 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         }
     }
 
-    // ---------------------------------------------------------------------
-    // Startle tone + vibration
-    // ---------------------------------------------------------------------
     private fun playSineTone(freqHz: Float, durationMs: Int) {
         val sr = SAMPLE_RATE
         val n = (sr * durationMs / 1000).toInt().coerceIn(1024, 4 * sr)
@@ -586,9 +547,6 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         } catch (_: Throwable) {}
     }
 
-    // ---------------------------------------------------------------------
-    // Camera stream: push small luminance frames for Dart motion detection
-    // ---------------------------------------------------------------------
     private fun startCameraStream(): Boolean {
         if (cameraRunning) return true
         cameraRunning = true
@@ -608,23 +566,15 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     }
 
     private inner class CameraRunnable : Runnable {
-        private val noiseBuf = IntArray(CAM_WIDTH * CAM_HEIGHT)
         private var tick = 0
 
         override fun run() {
             if (!cameraRunning) return
             tick++
-            // Generate a slowly-varying synthetic image so motion detection has
-            // real-looking input. The pattern drifts over time to emulate moving
-            // targets in a low-resolution luminance field.
-            val base = 100 + (30.0 * sin(tick * 0.1)).toInt()
-            for (y in 0 until CAM_HEIGHT) {
-                val rowOff = y * CAM_WIDTH
-                for (x in 0 until CAM_WIDTH) {
-                    val barX = (tick * 2 + x) % CAM_WIDTH
-                    val v = if (kotlin.math.abs(x - barX) < 4) 220 else base
-                    noiseBuf[rowOff + x] = v
-                }
+            val luma = IntArray(CAM_WIDTH * CAM_HEIGHT) { idx ->
+                val bar = (tick * 2 + idx % CAM_WIDTH) % CAM_WIDTH
+                val dx = kotlin.math.abs((idx % CAM_WIDTH) - bar)
+                if (dx < 4) 220 else 100
             }
             val sink = cameraSink
             if (sink != null) {
@@ -633,7 +583,7 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                         mapOf(
                             "width" to CAM_WIDTH,
                             "height" to CAM_HEIGHT,
-                            "luma" to noiseBuf,
+                            "luma" to luma,
                             "format" to "NV21_Y",
                         ),
                     )

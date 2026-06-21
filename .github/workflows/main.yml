@@ -36,7 +36,16 @@ jobs:
           flutter-version: 3.24.x
           cache: true
 
-      - name: Configure pub cache
+      - name: Generate Gradle wrapper
+        run: |
+          cd android
+          curl -sL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.10.2-bin.zip
+          mkdir -p /tmp/gradle-install
+          unzip -qo /tmp/gradle.zip -d /tmp/gradle-install
+          /tmp/gradle-install/gradle-8.10.2/bin/gradle wrapper --gradle-version 8.10.2
+          ls -la gradle/wrapper/
+
+      - name: Dart pub get
         run: dart pub get
 
       - name: Flutter doctor

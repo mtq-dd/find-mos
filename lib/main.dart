@@ -85,16 +85,28 @@ class _PermissionGateState extends State<PermissionGate> {
             children: [
               const Icon(Icons.radar, size: 80, color: Colors.greenAccent),
               const SizedBox(height: 24),
-              const Text('声光猎蚊', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.greenAccent, letterSpacing: 4)),
+              const Text(
+                '声光猎蚊',
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.greenAccent,
+                  letterSpacing: 4,
+                ),
+              ),
               const SizedBox(height: 16),
-              const Text('需要「相机」与「麦克风」权限方可开始探测。', textAlign: TextAlign.center, style: TextStyle(color: Colors.white70, fontSize: 16)),
+              const Text(
+                '需要「相机」与「麦克风」权限方可开始探测。',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white70, fontSize: 16),
+              ),
               const SizedBox(height: 32),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  _permChip(Icons.videocam, '相机', _hasCamera),
+                  _chip(Icons.videocam, '相机', _hasCamera),
                   const SizedBox(width: 12),
-                  _permChip(Icons.mic, '麦克风', _hasMic),
+                  _chip(Icons.mic, '麦克风', _hasMic),
                 ],
               ),
               const SizedBox(height: 32),
@@ -114,7 +126,7 @@ class _PermissionGateState extends State<PermissionGate> {
     );
   }
 
-  Widget _permChip(IconData icon, String label, bool ok) {
+  Widget _chip(IconData icon, String label, bool ok) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       decoration: BoxDecoration(
@@ -139,9 +151,9 @@ class FindMosHome extends StatefulWidget {
 }
 
 class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
-  static const _methodChannel = MethodChannel('com.example.find_mos/method');
-  static const _radarChannel = EventChannel('com.example.find_mos/radar');
-  static const _cameraChannel = EventChannel('com.example.find_mos/camera');
+  static const _methodChannel = MethodChannel('com.example.mosqitoukiller/method');
+  static const _radarChannel = EventChannel('com.example.mosqitoukiller/radar');
+  static const _cameraChannel = EventChannel('com.example.mosqitoukiller/camera');
 
   StreamSubscription<dynamic>? _radarSub;
   StreamSubscription<dynamic>? _cameraSub;
@@ -170,7 +182,6 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _startRadar();
     _startCamera();
-    _methodChannel.invokeMethod<bool>('keepScreenOn', <String, dynamic>{'on': true});
   }
 
   @override
@@ -311,7 +322,10 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
 
   Future<void> _playStartle() async {
     try {
-      await _methodChannel.invokeMethod<bool>('playStartleTone', <String, dynamic>{'frequency': 350.0, 'durationMs': 1000});
+      await _methodChannel.invokeMethod<bool>(
+        'playStartleTone',
+        <String, dynamic>{'frequency': 350.0, 'durationMs': 1000},
+      );
     } on PlatformException catch (e) {
       debugPrint('playStartleTone error: $e');
     }
@@ -321,21 +335,22 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-      child: Column(
-        children: [
-          _buildStatusBar(),
-          Expanded(
-            child: Row(
-              children: [
-                Expanded(flex: 5, child: _buildRadarPanel()),
-                Expanded(flex: 5, child: _buildCameraPanel()),
-              ],
+        child: Column(
+          children: [
+            _buildStatusBar(),
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(flex: 5, child: _buildRadarPanel()),
+                  Expanded(flex: 5, child: _buildCameraPanel()),
+                ],
+              ),
             ),
-          ),
-          _buildControls(),
-        ],
+            _buildControls(),
+          ],
+        ),
       ),
-    ));
+    );
   }
 
   Widget _buildStatusBar() {
@@ -354,19 +369,21 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
       child: Row(children: [
         Icon(Icons.radar, color: accent),
         const SizedBox(width: 8),
-        Text('声光猎蚊 · $_status',
-            style: TextStyle(color: accent, fontWeight: FontWeight.bold, letterSpacing: 2)),
+        Text(
+          '声光猎蚊 · $_status',
+          style: TextStyle(color: accent, fontWeight: FontWeight.bold, letterSpacing: 2),
+        ),
         const Spacer(),
-        _chip(Icons.mic, '麦克风', _radarOn),
+        _chipSmall(Icons.mic, '麦克风', _radarOn),
         const SizedBox(width: 8),
-        _chip(Icons.videocam, '视觉', _cameraOn),
+        _chipSmall(Icons.videocam, '视觉', _cameraOn),
         const SizedBox(width: 8),
-        _chip(Icons.flash_on, '补光', _torchOn),
+        _chipSmall(Icons.flash_on, '补光', _torchOn),
       ]),
     );
   }
 
-  Widget _chip(IconData icon, String label, bool on) {
+  Widget _chipSmall(IconData icon, String label, bool on) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
@@ -401,9 +418,16 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
         ]),
         const SizedBox(height: 8),
         Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-          Text('距离: ${(_target.distance * 100).toStringAsFixed(0)}%', style: const TextStyle(color: Colors.white70)),
-          Text('方位: ${(_target.azimuth * 180 / 3.14159).toStringAsFixed(1)}°', style: const TextStyle(color: Colors.white70))
-      )),
+          Text(
+            '距离: ${(_target.distance * 100).toStringAsFixed(0)}%',
+            style: const TextStyle(color: Colors.white70),
+          ),
+          Text(
+            '方位: ${(_target.azimuth * 180 / 3.14159).toStringAsFixed(1)}°',
+            style: const TextStyle(color: Colors.white70),
+          ),
+        ]),
+      ]),
     );
   }
 
@@ -412,14 +436,22 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     return Row(children: [
       SizedBox(width: 24, child: Text(label, style: const TextStyle(color: Colors.white54))),
       const SizedBox(width: 4),
-      Expanded(child: Container(
-        height: 10,
-        decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(4)),
-        child: FractionallySizedBox(
-          alignment: Alignment.centerLeft,
-          widthFactor: v,
-          child: Container(decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(4))),
-      )),
+      Expanded(
+        child: Container(
+          height: 10,
+          decoration: BoxDecoration(
+            color: Colors.white10,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: FractionallySizedBox(
+            alignment: Alignment.centerLeft,
+            widthFactor: v,
+            child: Container(
+              decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(4)),
+            ),
+          ),
+        ),
+      ),
     ]);
   }
 
@@ -428,7 +460,10 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
       padding: const EdgeInsets.all(12.0),
       child: Column(
         children: [
-          const Text('视觉运动侦测', style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+          const Text(
+            '视觉运动侦测',
+            style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
+          ),
           const SizedBox(height: 8),
           Expanded(
             child: ClipRRect(
@@ -444,8 +479,10 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
             ),
           ),
           const SizedBox(height: 8),
-          Text('运动区域: ${_rects.length}   帧: ${_frameW}×${_frameH}',
-              style: const TextStyle(color: Colors.white70, fontSize: 12)),
+          Text(
+            '运动区域: ${_rects.length}   帧: ${_frameW}×${_frameH}',
+            style: const TextStyle(color: Colors.white70, fontSize: 12),
+          ),
         ],
       ),
     );
@@ -454,41 +491,40 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   Widget _buildMotionOverlay() {
     return LayoutBuilder(
       builder: (context, constraints) {
-      final w = constraints.maxWidth;
-      final h = constraints.maxHeight;
-      final scaleX = w / _frameW;
-      final scaleY = h / _frameH;
-      return Stack(
-        children: [
-          Positioned.fill(
-            child: CustomPaint(painter: _ScanlinesPainter()),
-          ),
-          ..._rects.map((r) {
-            return Positioned(
-              left: r.left * scaleX,
-              top: r.top * scaleY,
-              width: (r.right - r.left + 1) * scaleX,
-              height: (r.bottom - r.top + 1) * scaleY,
-              child: Container(
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.redAccent, width: 2),
-                  color: Colors.redAccent.withOpacity(0.15),
+        final w = constraints.maxWidth;
+        final h = constraints.maxHeight;
+        final scaleX = w / _frameW;
+        final scaleY = h / _frameH;
+        return Stack(
+          children: [
+            Positioned.fill(child: CustomPaint(painter: _ScanlinesPainter())),
+            ..._rects.map((r) {
+              return Positioned(
+                left: r.left * scaleX,
+                top: r.top * scaleY,
+                width: (r.right - r.left + 1) * scaleX,
+                height: (r.bottom - r.top + 1) * scaleY,
+                child: Container(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.redAccent, width: 2),
+                    color: Colors.redAccent.withOpacity(0.15),
+                  ),
                 ),
               );
             }),
-          if (_rects.isEmpty)
-            const Positioned.fill(
-              child: Center(
-                child: Text('未检测到运动', style: TextStyle(color: Colors.white30)),
+            if (_rects.isEmpty)
+              const Positioned.fill(
+                child: Center(
+                  child: Text('未检测到运动', style: TextStyle(color: Colors.white30)),
+                ),
               ),
-            ),
-        ],
-      );
-    },
-  );
-}
+          ],
+        );
+      },
+    );
+  }
 
-Widget _buildControls() {
+  Widget _buildControls() {
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Row(
@@ -497,7 +533,7 @@ Widget _buildControls() {
           _ctrlButton(
             icon: Icons.flashlight_on,
             label: '手电筒',
-            on: false,
+            on: _torchOn,
             onPressed: _toggleTorch,
             color: Colors.yellowAccent,
           ),
@@ -560,6 +596,7 @@ Widget _buildControls() {
           const SizedBox(height: 4),
           Text(label, style: TextStyle(color: on ? color : Colors.white70, fontSize: 12)),
         ]),
+      ),
     );
   }
 }
@@ -567,7 +604,9 @@ Widget _buildControls() {
 class _ScanlinesPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = Colors.greenAccent.withOpacity(0.06)..strokeWidth = 1;
+    final paint = Paint()
+      ..color = Colors.greenAccent.withOpacity(0.06)
+      ..strokeWidth = 1;
     for (var y = 0; y < size.height; y += 3) {
       canvas.drawLine(Offset(0, y.toDouble()), Offset(size.width, y.toDouble()), paint);
     }

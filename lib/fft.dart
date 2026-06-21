@@ -1,12 +1,10 @@
-library;
-
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-/// Radix-2 Cooley-Tukey FFT / inverse FFT operating in place on [Float64List].
+/// Radix-2 Cooley-Tukey FFT / inverse FFT.
 ///
-/// Input length must be a power of 2. The same precomputed bit-reversal table
-/// and twiddle factors are reused across calls for efficiency.
+/// Input length must be a power of 2. The same precomputed bit-reversal
+/// table and twiddle factors are reused across calls for efficiency.
 class Radix2FFT {
   final int size;
   final Int32List _bitRev;

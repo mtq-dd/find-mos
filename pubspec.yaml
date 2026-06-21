@@ -1,15 +1,15 @@
-name: find_mos
-description: 声光猎蚊 — 基于声学雷达与视觉运动侦测的蚊子定位工具
-publish_to: "none"
+name: mosqitoukiller
+description: "声光猎蚊 - 基于声学雷达与视觉运动侦测的蚊子定位工具"
+publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ">=3.0.0 <4.0.0"
-  flutter: ">=3.0.0"
+  sdk: ^3.5.0
 
 dependencies:
   flutter:
     sdk: flutter
+  cupertino_icons: ^1.0.8
   permission_handler: ^11.3.1
 
 dev_dependencies:
