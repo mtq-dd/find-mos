@@ -1,3 +1,74 @@
 #!/bin/sh
-# Placeholder - CI will regenerate this via `gradle wrapper --gradle-version 8.10.2`
-exec "$(dirname "$0")/../../../../gradle" "$@"
+set -e
+
+# Lightweight fallback gradle launcher for CI when the gradle wrapper JAR is missing.
+# It downloads the Gradle distribution specified in android/gradle/wrapper/gradle-wrapper.properties
+# and runs the gradle binary from the extracted distribution.
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+# Read version from gradle-wrapper.properties if present, otherwise fallback.
+PROPS_FILE="$DIR/gradle/wrapper/gradle-wrapper.properties"
+DEFAULT_VERSION="8.10.2"
+GRADLE_VERSION="$DEFAULT_VERSION"
+if [ -f "$PROPS_FILE" ]; then
+  # attempt to parse distributionUrl=...gradle-<version>-all.zip
+  DIST_URL_LINE=$(grep -E "^distributionUrl=" "$PROPS_FILE" 2>/dev/null || true)
+  if [ -n "$DIST_URL_LINE" ]; then
+    # extract the version using a simple pattern
+    maybe=$(echo "$DIST_URL_LINE" | sed -E 's/.*gradle-([0-9]+\.[0-9]+\.[0-9]+).*$/\1/')
+    if [ -n "$maybe" ]; then
+      GRADLE_VERSION="$maybe"
+    fi
+  fi
+fi
+
+DIST_URL="https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-all.zip"
+CACHE_DIR="${HOME}/.gradle_wrapper/${GRADLE_VERSION}"
+ZIP_PATH="$CACHE_DIR/gradle-${GRADLE_VERSION}-all.zip"
+INSTALL_DIR="$CACHE_DIR/gradle-${GRADLE_VERSION}"
+
+mkdir -p "$CACHE_DIR"
+
+if [ ! -x "$INSTALL_DIR/bin/gradle" ]; then
+  echo "Gradle ${GRADLE_VERSION} not found, downloading ${DIST_URL}..."
+  if [ ! -f "$ZIP_PATH" ]; then
+    if command -v curl >/dev/null 2>&1; then
+      curl -sSL -o "$ZIP_PATH" "$DIST_URL"
+    elif command -v wget >/dev/null 2>&1; then
+      wget -q -O "$ZIP_PATH" "$DIST_URL"
+    else
+      echo "Error: neither curl nor wget available to download gradle distribution" >&2
+      exit 1
+    fi
+  fi
+
+  # extract
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q -o "$ZIP_PATH" -d "$CACHE_DIR"
+  else
+    # busybox/unzip fallback: try jar
+    if command -v jar >/dev/null 2>&1; then
+      (cd "$CACHE_DIR" && jar xf "$ZIP_PATH")
+    else
+      echo "Error: unzip or jar not available to extract gradle distribution" >&2
+      exit 1
+    fi
+  fi
+
+  # Ensure extracted folder exists
+  if [ ! -d "$INSTALL_DIR" ]; then
+    # The zip extracts to gradle-<version> inside CACHE_DIR
+    EXTRACTED="$CACHE_DIR/gradle-${GRADLE_VERSION}"
+    if [ -d "$EXTRACTED" ]; then
+      mv -f "$EXTRACTED" "$INSTALL_DIR" 2>/dev/null || true
+    fi
+  fi
+
+  if [ ! -x "$INSTALL_DIR/bin/gradle" ]; then
+    echo "Error: failed to install gradle to $INSTALL_DIR" >&2
+    ls -la "$CACHE_DIR" || true
+    exit 1
+  fi
+fi
+
+exec "$INSTALL_DIR/bin/gradle" "$@"
