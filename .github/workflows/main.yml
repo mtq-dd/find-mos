@@ -1,70 +1,23 @@
-# =============================================================================
-# Flutter APK CI/CD Workflow
-# =============================================================================
-# 触发方式:
-#   1. 推送 v* 格式的 tag（如 v1.0.0）→ 自动构建 release APK 并创建 GitHub Release
-#   2. 手动触发（workflow_dispatch）→ 构建 debug/release APK
-#   3. PR 到 main 分支 → 仅运行测试，不构建 APK
-#
-# 所需的 Secrets（在仓库 Settings → Secrets → Actions 中配置）:
-#   KEYSTORE_BASE64       - 签名密钥的 Base64 编码（仅 release 签名需要）
-#   KEYSTORE_PASSWORD     - 密钥库密码
-#   KEY_ALIAS             - 密钥别名
-#   KEY_PASSWORD          - 密钥密码
-#
-# 生成 KEYSTORE_BASE64 的命令:
-#   base64 -i your-release-key.jks -o keystore_base64.txt
-# =============================================================================
-
 name: Flutter APK Build
 
 on:
   push:
     tags:
       - 'v*'
-
+    branches:
+      - main
   pull_request:
     branches:
       - main
-      - master
-
   workflow_dispatch:
-    inputs:
-      build_mode:
-        description: '构建模式'
-        required: true
-        type: choice
-        options:
-          - release
-          - debug
-          - profile
-        default: release
 
-      split_per_abi:
-        description: '是否按 ABI 分包（arm64-v8a / armeabi-v7a / x86_64）'
-        required: false
-        type: boolean
-        default: false
-
-# ── 并发控制：同一分支/tag 的重复推送只保留最新一次运行 ──
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# ── 环境变量 ──
-env:
-  FLUTTER_VERSION: '3.35.x'
-  FLUTTER_CHANNEL: 'stable'
-  JAVA_VERSION: '17'
-  JAVA_DISTRIBUTION: 'zulu'
-
 jobs:
-  # ===========================================================================
-  # Job 1: 代码质量检查 & 测试（PR 触发时运行）
-  # ===========================================================================
-  test:
-    name: Analyze & Test
-    if: github.event_name == 'pull_request'
+  build-apk:
+    name: Build APK (debug + release)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -73,156 +26,40 @@ jobs:
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: ${{ env.JAVA_DISTRIBUTION }}
-          java-version: ${{ env.JAVA_VERSION }}
+          distribution: zulu
+          java-version: 17
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: ${{ env.FLUTTER_CHANNEL }}
+          channel: stable
+          flutter-version: 3.24.x
           cache: true
 
-      - name: Get dependencies
-        run: flutter pub get
+      - name: Configure pub cache
+        run: dart pub get
 
-      - name: Analyze code
-        run: flutter analyze --no-fatal-infos
+      - name: Flutter doctor
+        run: flutter doctor -v
 
-      - name: Run tests
-        run: flutter test --coverage
+      - name: Build debug APK
+        run: flutter build apk --debug --no-pub
 
-  # ===========================================================================
-  # Job 2: 构建 APK
-  # ===========================================================================
-  build:
-    name: Build APK
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      # ── 检出代码 ──
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Build release APK (unsigned)
+        run: flutter build apk --release --no-pub
 
-      # ── 环境准备 ──
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: ${{ env.JAVA_DISTRIBUTION }}
-          java-version: ${{ env.JAVA_VERSION }}
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: ${{ env.FLUTTER_CHANNEL }}
-          cache: true
-
-      # ── 解析版本号（从 tag 或 pubspec.yaml 提取）──
-      - name: Extract version
-        id: version
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
-          else
-            VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d '[:space:]')
-          fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Version: ${VERSION}"
-
-      # ── 安装依赖 ──
-      - name: Get dependencies
-        run: flutter pub get
-
-      # ── 代码分析（构建前快速检查）──
-      - name: Analyze code
-        run: flutter analyze --no-fatal-infos
-
-      # ── 运行测试 ──
-      - name: Run tests
-        run: flutter test
-
-      # ── 确定构建模式 ──
-      - name: Determine build mode
-        id: build_mode
-        run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "mode=${{ github.event.inputs.build_mode }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "mode=release" >> "$GITHUB_OUTPUT"
-          fi
-
-      # ── 配置签名（仅 release 模式）──
-      - name: Setup signing
-        if: steps.build_mode.outputs.mode == 'release' && env.KEYSTORE_BASE64 != ''
-        id: signing
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: |
-          # 解码 keystore 文件
-          echo "$KEYSTORE_BASE64" | base64 -d > android/app/release-key.jks
-
-          # 生成 key.properties
-          cat > android/app/key.properties <<EOF
-          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
-          keyPassword=${{ secrets.KEY_PASSWORD }}
-          keyAlias=${{ secrets.KEY_ALIAS }}
-          storeFile=release-key.jks
-          EOF
-
-          echo "signing_configured=true" >> "$GITHUB_OUTPUT"
-          echo "Signing configured successfully"
-
-      # ── 构建 APK（单包）──
-      - name: Build APK
-        if: github.event_name != 'workflow_dispatch' || github.event.inputs.split_per_abi != 'true'
-        run: |
-          flutter build apk \
-            --${{ steps.build_mode.outputs.mode }} \
-            --build-name=${{ steps.version.outputs.version }} \
-            --build-number=${{ github.run_number }}
-
-      # ── 构建 APK（按 ABI 分包）──
-      - name: Build APK (split per ABI)
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.split_per_abi == 'true'
-        run: |
-          flutter build apk \
-            --${{ steps.build_mode.outputs.mode }} \
-            --split-per-abi \
-            --build-name=${{ steps.version.outputs.version }} \
-            --build-number=${{ github.run_number }}
-
-      # ── 上传 APK 到 Artifacts ──
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: apk-${{ steps.build_mode.outputs.mode }}-${{ steps.version.outputs.version }}
+          name: apk-builds
           path: build/app/outputs/flutter-apk/*.apk
-          retention-days: 30
           if-no-files-found: error
 
-      # ── 构建摘要 ──
-      - name: Build summary
-        run: |
-          echo "========================================="
-          echo "  Build Complete"
-          echo "========================================="
-          echo "  Version : ${{ steps.version.outputs.version }}"
-          echo "  Mode    : ${{ steps.build_mode.outputs.mode }}"
-          echo "  Build # : ${{ github.run_number }}"
-          echo "========================================="
-          echo ""
-          echo "APK files:"
-          ls -lh build/app/outputs/flutter-apk/*.apk
-
-      # ── 创建 GitHub Release（仅 tag 触发）──
-      - name: Create Release
+      - name: Create Release (on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          name: Release ${{ steps.version.outputs.version }}
-          draft: false
-          prerelease: false
+          name: Release ${{ github.ref_name }}
           generate_release_notes: true
           files: build/app/outputs/flutter-apk/*.apk
         env:

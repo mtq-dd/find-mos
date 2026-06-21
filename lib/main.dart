@@ -1,4 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+import 'fft.dart';
+import 'motion.dart';
+import 'radar.dart';
 
 void main() {
   runApp(const FindMosApp());
@@ -10,25 +18,660 @@ class FindMosApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Find MOS',
+      title: '声光猎蚊',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        primarySwatch: Colors.blue,
+        brightness: Brightness.dark,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.greenAccent,
+          brightness: Brightness.dark,
+        ),
+        scaffoldBackgroundColor: const Color(0xFF0B1A14),
+        useMaterial3: true,
       ),
-      home: const HomePage(),
+      home: const PermissionGate(),
     );
   }
 }
 
-class HomePage extends StatelessWidget {
-  const HomePage({super.key});
+class PermissionGate extends StatefulWidget {
+  const PermissionGate({super.key});
+
+  @override
+  State<PermissionGate> createState() => _PermissionGateState();
+}
+
+class _PermissionGateState extends State<PermissionGate> {
+  bool _ready = false;
+  bool _hasCamera = false;
+  bool _hasMic = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkPermissions();
+  }
+
+  Future<void> _checkPermissions() async {
+    final cam = await Permission.camera.status;
+    final mic = await Permission.microphone.status;
+    setState(() {
+      _hasCamera = cam.isGranted;
+      _hasMic = mic.isGranted;
+      _ready = _hasCamera && _hasMic;
+    });
+  }
+
+  Future<void> _request() async {
+    final results = await [
+      Permission.camera,
+      Permission.microphone,
+    ].request();
+    setState(() {
+      _hasCamera = results[Permission.camera]?.isGranted ?? false;
+      _hasMic = results[Permission.microphone]?.isGranted ?? false;
+      _ready = _hasCamera && _hasMic;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_ready) {
+      return const FindMosHome();
+    }
+    return Scaffold(
+      body: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.radar,
+                size: 80,
+                color: Colors.greenAccent,
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                '声光猎蚊',
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.greenAccent,
+                  letterSpacing: 4,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                '需要「相机」与「麦克风」权限方可开始探测。',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white70, fontSize: 16),
+              ),
+              const SizedBox(height: 32),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _permChip(Icons.videocam, '相机', _hasCamera),
+                  const SizedBox(width: 12),
+                  _permChip(Icons.mic, '麦克风', _hasMic),
+                ],
+              ),
+              const SizedBox(height: 32),
+              ElevatedButton.icon(
+                onPressed: _request,
+                icon: const Icon(Icons.check_circle),
+                label: const Text('请求权限'),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 14,
+                  ),
+                  textStyle: const TextStyle(fontSize: 16),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _permChip(IconData icon, String label, bool ok) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: ok ? Colors.greenAccent.withOpacity(0.2) : Colors.redAccent.withOpacity(0.2),
+        border: Border.all(
+          color: ok ? Colors.greenAccent : Colors.redAccent,
+        ),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18, color: ok ? Colors.greenAccent : Colors.redAccent),
+          const SizedBox(width: 6),
+          Text(label, style: TextStyle(color: ok ? Colors.greenAccent : Colors.redAccent)),
+        ],
+      ),
+    );
+  }
+}
+
+class FindMosHome extends StatefulWidget {
+  const FindMosHome({super.key});
+
+  @override
+  State<FindMosHome> createState() => _FindMosHomeState();
+}
+
+class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
+  static const _methodChannel = MethodChannel('com.example.find_mos/method');
+  static const _radarChannel = EventChannel('com.example.find_mos/radar');
+  static const _cameraChannel = EventChannel('com.example.find_mos/camera');
+
+  StreamSubscription<dynamic>? _radarSub;
+  StreamSubscription<dynamic>? _cameraSub;
+
+  RadarTarget _target = const RadarTarget(distance: 0, azimuth: 0);
+  String _direction = '等待信号';
+  String _status = '雷达未启动';
+  double _leftEnergy = 0;
+  double _rightEnergy = 0;
+
+  bool _radarOn = false;
+  bool _cameraOn = false;
+  bool _torchOn = false;
+
+  // Motion detector state
+  MotionDetector? _motion;
+  List<MotionRect> _rects = const <MotionRect>[];
+  int _frameW = 160;
+  int _frameH = 90;
+  int _motionTick = 0;
+
+  // UI state
+  bool _pulse = false;
+  Timer? _pulseTimer;
+
+  // FFT instance used for local diagnostics (independent of the native FFT).
+  final Radix2FFT fft = Radix2FFT(1024);
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _startRadar();
+    _startCamera();
+    _methodChannel.invokeMethod<bool>('keepScreenOn', <String, dynamic>{'on': true});
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _stopRadar();
+    _stopCamera();
+    _pulseTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        _startRadar();
+        _startCamera();
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+      case AppLifecycleState.inactive:
+        _stopRadar();
+        _stopCamera();
+        _methodChannel.invokeMethod<bool>('setTorch', <String, dynamic>{'on': false});
+    }
+  }
+
+  Future<void> _startRadar() async {
+    if (_radarOn) return;
+    try {
+      final ok = await _methodChannel.invokeMethod<bool>('startRadar') ?? false;
+      if (!ok) {
+        setState(() {
+          _status = '雷达启动失败';
+        });
+        return;
+      }
+      _radarOn = true;
+      _radarSub = _radarChannel.receiveBroadcastStream().listen(_onRadarEvent);
+    } on PlatformException catch (e) {
+      debugPrint('startRadar error: $e');
+    }
+  }
+
+  Future<void> _stopRadar() async {
+    if (!_radarOn) return;
+    _radarOn = false;
+    await _radarSub?.cancel();
+    _radarSub = null;
+    try {
+      await _methodChannel.invokeMethod<bool>('stopRadar');
+    } on PlatformException catch (e) {
+      debugPrint('stopRadar error: $e');
+    }
+  }
+
+  Future<void> _startCamera() async {
+    if (_cameraOn) return;
+    try {
+      final ok = await _methodChannel.invokeMethod<bool>('startCameraStream') ?? false;
+      if (!ok) {
+        setState(() {
+          _status = '相机启动失败';
+        });
+        return;
+      }
+      _cameraOn = true;
+      _cameraSub = _cameraChannel.receiveBroadcastStream().listen(_onCameraEvent);
+    } on PlatformException catch (e) {
+      debugPrint('startCamera error: $e');
+    }
+  }
+
+  Future<void> _stopCamera() async {
+    if (!_cameraOn) return;
+    _cameraOn = false;
+    await _cameraSub?.cancel();
+    _cameraSub = null;
+    try {
+      await _methodChannel.invokeMethod<bool>('stopCameraStream');
+    } on PlatformException catch (e) {
+      debugPrint('stopCamera error: $e');
+    }
+  }
+
+  void _onRadarEvent(dynamic event) {
+    final map = event as Map<dynamic, dynamic>;
+    final azimuth = (map['azimuth'] as num?)?.toDouble() ?? 0.0;
+    final distance = (map['distance'] as num?)?.toDouble() ?? 0.0;
+    final direction = (map['direction'] as String?) ?? '正前方';
+    final status = (map['status'] as String?) ?? '监听中';
+    final lE = (map['leftEnergy'] as num?)?.toDouble() ?? 0.0;
+    final rE = (map['rightEnergy'] as num?)?.toDouble() ?? 0.0;
+    setState(() {
+      _target = RadarTarget(distance: distance, azimuth: azimuth);
+      _direction = direction;
+      _status = _rects.isNotEmpty ? '检测到运动' : status;
+      _leftEnergy = lE;
+      _rightEnergy = rE;
+      if (distance > 0.6) _triggerPulse();
+    });
+  }
+
+  void _onCameraEvent(dynamic event) {
+    final map = event as Map<dynamic, dynamic>;
+    final w = (map['width'] as int?) ?? 160;
+    final h = (map['height'] as int?) ?? 90;
+    final luma = (map['luma'] as List<dynamic>?)?.cast<int>() ?? const <int>[];
+    if (_motion == null || _motion!.width != w || _motion!.height != h) {
+      _motion = MotionDetector(width: w, height: h, threshold: 25, minArea: 5, maxArea: 200);
+      _frameW = w;
+      _frameH = h;
+    }
+    final rects = _motion!.detect(luma);
+    _motionTick++;
+    if (_motionTick % 1 == 0) {
+      setState(() {
+        _rects = rects;
+        if (_rects.isNotEmpty && _status != '目标接近') _status = '检测到运动';
+      });
+    }
+  }
+
+  void _triggerPulse() {
+    if (_pulse) return;
+    setState(() => _pulse = true);
+    _pulseTimer?.cancel();
+    _pulseTimer = Timer(const Duration(milliseconds: 400), () {
+      if (mounted) setState(() => _pulse = false);
+    });
+  }
+
+  Future<void> _toggleTorch() async {
+    final next = !_torchOn;
+    try {
+      await _methodChannel.invokeMethod<bool>('setTorch', <String, dynamic>{'on': next});
+      setState(() => _torchOn = next);
+    } on PlatformException catch (e) {
+      debugPrint('setTorch error: $e');
+    }
+  }
+
+  Future<void> _playStartle() async {
+    try {
+      await _methodChannel.invokeMethod<bool>(
+        'playStartleTone',
+        <String, dynamic>{'frequency': 350.0, 'durationMs': 1000},
+      );
+    } on PlatformException catch (e) {
+      debugPrint('playStartleTone error: $e');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Find MOS')),
-      body: const Center(
-        child: Text('Welcome to Find MOS'),
+      body: SafeArea(
+        child: Column(
+          children: [
+            _buildStatusBar(),
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(flex: 5, child: _buildRadarPanel()),
+                  Expanded(flex: 5, child: _buildCameraPanel()),
+                ],
+              ),
+            ),
+            _buildControls(),
+          ],
+        ),
       ),
     );
   }
+
+  Widget _buildStatusBar() {
+    final accent = _status == '目标接近'
+        ? Colors.redAccent
+        : _status == '检测到运动'
+            ? Colors.orangeAccent
+            : _status == '追踪中'
+                ? Colors.yellowAccent
+                : Colors.greenAccent;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: accent.withOpacity(0.3))),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.radar, color: accent),
+          const SizedBox(width: 8),
+          Text(
+            '声光猎蚊 · $_status',
+            style: TextStyle(color: accent, fontWeight: FontWeight.bold, letterSpacing: 2),
+          ),
+          const Spacer(),
+          _chip(Icons.mic, '麦克风', _radarOn),
+          const SizedBox(width: 8),
+          _chip(Icons.videocam, '视觉', _cameraOn),
+          const SizedBox(width: 8),
+          _chip(Icons.flash_on, '补光', _torchOn),
+        ],
+      ),
+    );
+  }
+
+  Widget _chip(IconData icon, String label, bool on) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: (on ? Colors.greenAccent : Colors.grey).withOpacity(0.15),
+        border: Border.all(color: on ? Colors.greenAccent : Colors.grey),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: on ? Colors.greenAccent : Colors.grey),
+          const SizedBox(width: 4),
+          Text(label, style: TextStyle(color: on ? Colors.greenAccent : Colors.grey, fontSize: 12)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRadarPanel() {
+    return Padding(
+      padding: const EdgeInsets.all(12.0),
+      child: Column(
+        children: [
+          Expanded(
+            child: RadarView(
+              target: _target,
+              pulse: _pulse || _target.distance > 0.6,
+              directionText: _direction,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: _energyBar('L', _leftEnergy, Colors.cyanAccent),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _energyBar('R', _rightEnergy, Colors.pinkAccent),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              Text('距离: ${(_target.distance * 100).toStringAsFixed(0)}%',
+                  style: const TextStyle(color: Colors.white70)),
+              Text('方位: ${(_target.azimuth * 180 / 3.14159).toStringAsFixed(1)}°',
+                  style: const TextStyle(color: Colors.white70)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _energyBar(String label, double value, Color color) {
+    final v = value.clamp(0.0, 1.0);
+    return Row(
+      children: [
+        SizedBox(width: 24, child: Text(label, style: const TextStyle(color: Colors.white54))),
+        const SizedBox(width: 4),
+        Expanded(
+          child: Container(
+            height: 10,
+            decoration: BoxDecoration(
+              color: Colors.white10,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: FractionallySizedBox(
+              alignment: Alignment.centerLeft,
+              widthFactor: v,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCameraPanel() {
+    return Padding(
+      padding: const EdgeInsets.all(12.0),
+      child: Column(
+        children: [
+          const Text(
+            '视觉运动侦测',
+            style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.greenAccent.withOpacity(0.4), width: 2),
+                  borderRadius: BorderRadius.circular(12),
+                  color: Colors.black,
+                ),
+                child: _buildMotionOverlay(),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '运动区域: ${_rects.length}   帧: ${_frameW}×${_frameH}',
+            style: const TextStyle(color: Colors.white70, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMotionOverlay() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final h = constraints.maxHeight;
+        final scaleX = w / _frameW;
+        final scaleY = h / _frameH;
+        // draw background stripes + rects
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _ScanlinesPainter(),
+              ),
+            ),
+            ..._rects.map((r) {
+              return Positioned(
+                left: r.left * scaleX,
+                top: r.top * scaleY,
+                width: (r.right - r.left + 1) * scaleX,
+                height: (r.bottom - r.top + 1) * scaleY,
+                child: Container(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.redAccent, width: 2),
+                    color: Colors.redAccent.withOpacity(0.15),
+                  ),
+                ),
+              );
+            }),
+            if (_rects.isEmpty)
+              const Positioned.fill(
+                child: Center(
+                  child: Text('未检测到运动', style: TextStyle(color: Colors.white30)),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildControls() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          _ctrlButton(
+            icon: Icons.flashlight_on,
+            label: '手电筒',
+            on: _torchOn,
+            onPressed: _toggleTorch,
+            color: Colors.yellowAccent,
+          ),
+          _ctrlButton(
+            icon: Icons.surround_sound,
+            label: '惊扰音',
+            on: false,
+            onPressed: _playStartle,
+            color: Colors.purpleAccent,
+          ),
+          _ctrlButton(
+            icon: Icons.radar,
+            label: _radarOn ? '雷达开' : '雷达关',
+            on: _radarOn,
+            onPressed: () async {
+              if (_radarOn) {
+                await _stopRadar();
+              } else {
+                await _startRadar();
+              }
+              setState(() {});
+            },
+            color: Colors.greenAccent,
+          ),
+          _ctrlButton(
+            icon: Icons.videocam,
+            label: _cameraOn ? '视觉开' : '视觉关',
+            on: _cameraOn,
+            onPressed: () async {
+              if (_cameraOn) {
+                await _stopCamera();
+              } else {
+                await _startCamera();
+              }
+              setState(() {});
+            },
+            color: Colors.cyanAccent,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _ctrlButton({
+    required IconData icon,
+    required String label,
+    required bool on,
+    required VoidCallback onPressed,
+    required Color color,
+  }) {
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: on ? color.withOpacity(0.25) : Colors.white10,
+          border: Border.all(color: on ? color : Colors.white24),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: on ? color : Colors.white70, size: 22),
+            const SizedBox(height: 4),
+            Text(label, style: TextStyle(color: on ? color : Colors.white70, fontSize: 12)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ScanlinesPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.greenAccent.withOpacity(0.06)
+      ..strokeWidth = 1;
+    for (var y = 0; y < size.height; y += 3) {
+      canvas.drawLine(Offset(0, y.toDouble()), Offset(size.width, y.toDouble()), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/// Platform-specific (Android) wake-lock orientation setup.
+/// Called implicitly by the native layer; this Dart extension exists only for
+/// clarity.
+@immutable
+class PlatformOverrides {
+  const PlatformOverrides._();
 }

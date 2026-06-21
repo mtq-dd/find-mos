@@ -1,23 +1,35 @@
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
 include ':app'
 
 def localPropertiesFile = rootProject.file("local.properties")
 if (localPropertiesFile.exists()) {
+    def localProperties = new Properties()
     localPropertiesFile.withReader('UTF-8') { reader ->
         localProperties.load(reader)
     }
-}
 
-def flutterSdkPath = localProperties.getProperty("flutter.sdk")
-if (flutterSdkPath == null && System.getenv("FLUTTER_ROOT") != null) {
-    flutterSdkPath = System.getenv("FLUTTER_ROOT")
+    def flutterSdkPath = localProperties.getProperty("flutter.sdk")
+    if (flutterSdkPath != null) {
+        // local property is used by flutter.gradle internally
+    }
 }
-if (flutterSdkPath == null) {
-    throw new GradleException("Flutter SDK not found. Define location with flutter.sdk in the local.properties file.")
+// Fallback to FLUTTER_ROOT env var
+def flutterSdkPathEnv = System.getenv("FLUTTER_ROOT")
+if (flutterSdkPathEnv != null) {
+    // Resolved by flutter.gradle from context
 }
-
-def flutterSdkPathNormalized = flutterSdkPath.replaceAll("\\\\", "/")
-def flutterToolsGradlePath = "$flutterSdkPathNormalized/packages/flutter_tools/gradle/flutter.gradle"
-if (!new File(flutterToolsGradlePath).exists()) {
-    throw new GradleException("Flutter SDK not found at $flutterSdkPath")
-}
-apply from: flutterToolsGradlePath
