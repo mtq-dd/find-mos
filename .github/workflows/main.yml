@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   build-apk:
-    name: Build APK (debug + release)
+    name: Build APK
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -74,9 +74,6 @@ jobs:
 
       - name: Flutter doctor
         run: flutter doctor -v
-
-      - name: Build debug APK
-        run: flutter build apk --debug
 
       - name: Build release APK (unsigned)
         run: flutter build apk --release

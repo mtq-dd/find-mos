@@ -71,6 +71,7 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         context = flutterPluginBinding.applicationContext
+        CrashHandler.init(context)
         methodChannel = MethodChannel(flutterPluginBinding.binaryMessenger, CHANNEL_METHOD)
         methodChannel.setMethodCallHandler(this)
 
@@ -169,6 +170,19 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 val durationMs = call.argument<Int>("durationMs") ?: 1000
                 playSineTone(freq, durationMs)
                 vibrateMedium()
+                result.success(true)
+            }
+            "getLatestCrashLog" -> {
+                result.success(CrashHandler.getLatestCrashLog())
+            }
+            "clearCrashLogs" -> {
+                CrashHandler.clearCrashLogs()
+                result.success(true)
+            }
+            "recordException" -> {
+                val message = call.argument<String>("message") ?: ""
+                val source = call.argument<String>("source") ?: "dart"
+                CrashHandler.recordHandledException(Exception(message), source)
                 result.success(true)
             }
             else -> result.notImplemented()
@@ -379,22 +393,27 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             }
             radix2FFT(ccRr, ccRi, inverse = true)
 
+            fun wrap(idx: Int): Int = ((idx % FFT_SIZE) + FFT_SIZE) % FFT_SIZE
+
             val maxItd = 40
             var best = Double.NEGATIVE_INFINITY
             var bestIdx = 0
             for (k in -maxItd..maxItd) {
-                val v = if (k >= 0) ccRr[k] else ccRr[FFT_SIZE + k]
+                val idx = wrap(k)
+                val v = ccRr[idx]
                 if (v > best) {
                     best = v
                     bestIdx = k
                 }
             }
-            val idx0 = if (bestIdx - 1 >= 0) bestIdx - 1 else FFT_SIZE - 1
-            val idx2 = if (bestIdx + 1 < FFT_SIZE) bestIdx + 1 else 0
-            val a = ccRr[idx0]
-            val b = ccRr[if (bestIdx >= 0) bestIdx else FFT_SIZE + bestIdx]
-            val c = ccRr[idx2]
-            val denom = (a - 2 * b + c)
+
+            val iPrev = wrap(bestIdx - 1)
+            val iCurr = wrap(bestIdx)
+            val iNext = wrap(bestIdx + 1)
+            val a = ccRr[iPrev]
+            val b = ccRr[iCurr]
+            val c = ccRr[iNext]
+            val denom = a - 2 * b + c
             val delta = if (denom != 0.0) 0.5 * (a - c) / denom else 0.0
             return bestIdx + delta
         }
