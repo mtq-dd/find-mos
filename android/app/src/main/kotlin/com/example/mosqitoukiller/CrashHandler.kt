@@ -98,10 +98,12 @@ object CrashHandler : Thread.UncaughtExceptionHandler {
     private fun getLogFile(): File {
         val dir = File(context.cacheDir, LOG_DIR)
         if (!dir.exists()) dir.mkdirs()
+        // Ensure we work with a List<File> to avoid type ambiguity with Array and overloads like last()
         val files = dir.listFiles { _, name -> name.endsWith(".log") }
-            ?.sortedByDescending { it.lastModified() } ?: emptyArray()
+            ?.sortedByDescending { it.lastModified() } ?: emptyList<File>()
+        // Safely delete the oldest file if we exceeded the max
         if (files.size >= MAX_LOG_FILES) {
-            files.last().delete()
+            files.lastOrNull()?.delete()
         }
         val dateStr = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.CHINA).format(Date())
         return File(dir, "crash_$dateStr.log")
