@@ -1,4 +1,3 @@
-/// Circular radar widget used to visualize acoustic target bearing and distance.
 library;
 
 import 'dart:math' as math;
@@ -6,10 +5,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 class RadarTarget {
-  /// Normalized distance 0..1 (1 = closest).
   final double distance;
-
-  /// Azimuth in radians: 0 = straight ahead, negative = left, positive = right.
   final double azimuth;
 
   const RadarTarget({required this.distance, required this.azimuth});
@@ -30,11 +26,7 @@ class RadarView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
-      painter: _RadarPainter(
-        target: target,
-        pulse: pulse,
-        directionText: directionText,
-      ),
+      painter: _RadarPainter(target: target, pulse: pulse, directionText: directionText),
       child: const SizedBox.expand(),
     );
   }
@@ -53,13 +45,11 @@ class _RadarPainter extends CustomPainter {
     final cy = size.height / 2;
     final radius = size.shortestSide / 2 - 6;
 
-    // Outer background
     final bg = Paint()
       ..color = const Color(0xFF0B1A14)
       ..style = PaintingStyle.fill;
     canvas.drawCircle(Offset(cx, cy), radius, bg);
 
-    // Concentric rings
     final ringPaint = Paint()
       ..color = Colors.greenAccent.withOpacity(0.35)
       ..style = PaintingStyle.stroke
@@ -68,14 +58,12 @@ class _RadarPainter extends CustomPainter {
       canvas.drawCircle(Offset(cx, cy), radius * i / 3, ringPaint);
     }
 
-    // Crosshairs
     final crossPaint = Paint()
       ..color = Colors.greenAccent.withOpacity(0.5)
       ..strokeWidth = 1.0;
     canvas.drawLine(Offset(cx - radius, cy), Offset(cx + radius, cy), crossPaint);
     canvas.drawLine(Offset(cx, cy - radius), Offset(cx, cy + radius), crossPaint);
 
-    // Sweep hint
     final sweepPaint = Paint()
       ..shader = SweepGradient(
         center: Alignment.center,
@@ -88,20 +76,17 @@ class _RadarPainter extends CustomPainter {
       ).createShader(Rect.fromCircle(center: Offset(cx, cy), radius: radius));
     canvas.drawCircle(Offset(cx, cy), radius, sweepPaint);
 
-    // Pulse ring when target is close
     if (pulse) {
       final pulsePaint = Paint()
-        ..color = Colors.redAccent.withOpacity(0.7)
+        ..color = Colors.redAccent.withOpacity(0.75)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2.5;
       canvas.drawCircle(Offset(cx, cy), radius * 0.95, pulsePaint);
     }
 
-    // Target
     if (target.distance > 0.02) {
-      // Azimuth mapping: 0 => top (straight ahead); negative => left (counter-clockwise)
       final angle = -math.pi / 2 - target.azimuth;
-      final r = radius * target.distance;
+      final r = radius * target.distance.clamp(0.0, 1.0);
       final tx = cx + r * math.cos(angle);
       final ty = cy + r * math.sin(angle);
       final dotRadius = 4.0 + target.distance * 12.0;
@@ -110,22 +95,11 @@ class _RadarPainter extends CustomPainter {
           : target.distance > 0.4
               ? Colors.orangeAccent
               : Colors.greenAccent;
-      canvas.drawCircle(
-        Offset(tx, ty),
-        dotRadius,
-        Paint()..color = dotColor.withOpacity(0.9),
-      );
-      // Glow
-      canvas.drawCircle(
-        Offset(tx, ty),
-        dotRadius + 6,
-        Paint()
-          ..color = dotColor.withOpacity(0.15)
-          ..style = PaintingStyle.fill,
-      );
+      canvas.drawCircle(Offset(tx, ty), dotRadius + 6,
+          Paint()..color = dotColor.withOpacity(0.15));
+      canvas.drawCircle(Offset(tx, ty), dotRadius, Paint()..color = dotColor);
     }
 
-    // Direction text at bottom
     if (directionText != null) {
       const textStyle = TextStyle(
         color: Colors.greenAccent,

@@ -49,10 +49,10 @@ class _PermissionGateState extends State<PermissionGate> {
   @override
   void initState() {
     super.initState();
-    _checkPermissions();
+    _check();
   }
 
-  Future<void> _checkPermissions() async {
+  Future<void> _check() async {
     final cam = await Permission.camera.status;
     final mic = await Permission.microphone.status;
     setState(() {
@@ -63,10 +63,7 @@ class _PermissionGateState extends State<PermissionGate> {
   }
 
   Future<void> _request() async {
-    final results = await [
-      Permission.camera,
-      Permission.microphone,
-    ].request();
+    final results = await [Permission.camera, Permission.microphone].request();
     setState(() {
       _hasCamera = results[Permission.camera]?.isGranted ?? false;
       _hasMic = results[Permission.microphone]?.isGranted ?? false;
@@ -86,27 +83,11 @@ class _PermissionGateState extends State<PermissionGate> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
-                Icons.radar,
-                size: 80,
-                color: Colors.greenAccent,
-              ),
+              const Icon(Icons.radar, size: 80, color: Colors.greenAccent),
               const SizedBox(height: 24),
-              const Text(
-                '声光猎蚊',
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.greenAccent,
-                  letterSpacing: 4,
-                ),
-              ),
+              const Text('声光猎蚊', style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.greenAccent, letterSpacing: 4)),
               const SizedBox(height: 16),
-              const Text(
-                '需要「相机」与「麦克风」权限方可开始探测。',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white70, fontSize: 16),
-              ),
+              const Text('需要「相机」与「麦克风」权限方可开始探测。', textAlign: TextAlign.center, style: TextStyle(color: Colors.white70, fontSize: 16)),
               const SizedBox(height: 32),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -122,10 +103,7 @@ class _PermissionGateState extends State<PermissionGate> {
                 icon: const Icon(Icons.check_circle),
                 label: const Text('请求权限'),
                 style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 14,
-                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
                   textStyle: const TextStyle(fontSize: 16),
                 ),
               ),
@@ -140,20 +118,15 @@ class _PermissionGateState extends State<PermissionGate> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       decoration: BoxDecoration(
-        color: ok ? Colors.greenAccent.withOpacity(0.2) : Colors.redAccent.withOpacity(0.2),
-        border: Border.all(
-          color: ok ? Colors.greenAccent : Colors.redAccent,
-        ),
+        color: (ok ? Colors.greenAccent : Colors.redAccent).withOpacity(0.2),
+        border: Border.all(color: ok ? Colors.greenAccent : Colors.redAccent),
         borderRadius: BorderRadius.circular(20),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 18, color: ok ? Colors.greenAccent : Colors.redAccent),
-          const SizedBox(width: 6),
-          Text(label, style: TextStyle(color: ok ? Colors.greenAccent : Colors.redAccent)),
-        ],
-      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 18, color: ok ? Colors.greenAccent : Colors.redAccent),
+        const SizedBox(width: 6),
+        Text(label, style: TextStyle(color: ok ? Colors.greenAccent : Colors.redAccent)),
+      ]),
     );
   }
 }
@@ -183,19 +156,13 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   bool _cameraOn = false;
   bool _torchOn = false;
 
-  // Motion detector state
   MotionDetector? _motion;
   List<MotionRect> _rects = const <MotionRect>[];
   int _frameW = 160;
   int _frameH = 90;
-  int _motionTick = 0;
 
-  // UI state
   bool _pulse = false;
   Timer? _pulseTimer;
-
-  // FFT instance used for local diagnostics (independent of the native FFT).
-  final Radix2FFT fft = Radix2FFT(1024);
 
   @override
   void initState() {
@@ -224,6 +191,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
       case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
         _stopRadar();
         _stopCamera();
         _methodChannel.invokeMethod<bool>('setTorch', <String, dynamic>{'on': false});
@@ -235,13 +203,12 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     try {
       final ok = await _methodChannel.invokeMethod<bool>('startRadar') ?? false;
       if (!ok) {
-        setState(() {
-          _status = '雷达启动失败';
-        });
+        setState(() => _status = '雷达启动失败');
         return;
       }
       _radarOn = true;
       _radarSub = _radarChannel.receiveBroadcastStream().listen(_onRadarEvent);
+      setState(() {});
     } on PlatformException catch (e) {
       debugPrint('startRadar error: $e');
     }
@@ -257,6 +224,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     } on PlatformException catch (e) {
       debugPrint('stopRadar error: $e');
     }
+    setState(() {});
   }
 
   Future<void> _startCamera() async {
@@ -264,13 +232,12 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     try {
       final ok = await _methodChannel.invokeMethod<bool>('startCameraStream') ?? false;
       if (!ok) {
-        setState(() {
-          _status = '相机启动失败';
-        });
+        setState(() => _status = '相机启动失败');
         return;
       }
       _cameraOn = true;
       _cameraSub = _cameraChannel.receiveBroadcastStream().listen(_onCameraEvent);
+      setState(() {});
     } on PlatformException catch (e) {
       debugPrint('startCamera error: $e');
     }
@@ -284,8 +251,9 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     try {
       await _methodChannel.invokeMethod<bool>('stopCameraStream');
     } on PlatformException catch (e) {
-      debugPrint('stopCamera error: $e');
+      debugPrint('stopCameraStream error: $e');
     }
+    setState(() {});
   }
 
   void _onRadarEvent(dynamic event) {
@@ -317,19 +285,15 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
       _frameH = h;
     }
     final rects = _motion!.detect(luma);
-    _motionTick++;
-    if (_motionTick % 1 == 0) {
-      setState(() {
-        _rects = rects;
-        if (_rects.isNotEmpty && _status != '目标接近') _status = '检测到运动';
-      });
-    }
+    setState(() {
+      _rects = rects;
+      if (_rects.isNotEmpty && _status != '目标接近') _status = '检测到运动';
+    });
   }
 
   void _triggerPulse() {
     if (_pulse) return;
     setState(() => _pulse = true);
-    _pulseTimer?.cancel();
     _pulseTimer = Timer(const Duration(milliseconds: 400), () {
       if (mounted) setState(() => _pulse = false);
     });
@@ -347,10 +311,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
 
   Future<void> _playStartle() async {
     try {
-      await _methodChannel.invokeMethod<bool>(
-        'playStartleTone',
-        <String, dynamic>{'frequency': 350.0, 'durationMs': 1000},
-      );
+      await _methodChannel.invokeMethod<bool>('playStartleTone', <String, dynamic>{'frequency': 350.0, 'durationMs': 1000});
     } on PlatformException catch (e) {
       debugPrint('playStartleTone error: $e');
     }
@@ -360,22 +321,21 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Column(
-          children: [
-            _buildStatusBar(),
-            Expanded(
-              child: Row(
-                children: [
-                  Expanded(flex: 5, child: _buildRadarPanel()),
-                  Expanded(flex: 5, child: _buildCameraPanel()),
-                ],
-              ),
+      child: Column(
+        children: [
+          _buildStatusBar(),
+          Expanded(
+            child: Row(
+              children: [
+                Expanded(flex: 5, child: _buildRadarPanel()),
+                Expanded(flex: 5, child: _buildCameraPanel()),
+              ],
             ),
-            _buildControls(),
-          ],
-        ),
+          ),
+          _buildControls(),
+        ],
       ),
-    );
+    ));
   }
 
   Widget _buildStatusBar() {
@@ -391,22 +351,18 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: accent.withOpacity(0.3))),
       ),
-      child: Row(
-        children: [
-          Icon(Icons.radar, color: accent),
-          const SizedBox(width: 8),
-          Text(
-            '声光猎蚊 · $_status',
-            style: TextStyle(color: accent, fontWeight: FontWeight.bold, letterSpacing: 2),
-          ),
-          const Spacer(),
-          _chip(Icons.mic, '麦克风', _radarOn),
-          const SizedBox(width: 8),
-          _chip(Icons.videocam, '视觉', _cameraOn),
-          const SizedBox(width: 8),
-          _chip(Icons.flash_on, '补光', _torchOn),
-        ],
-      ),
+      child: Row(children: [
+        Icon(Icons.radar, color: accent),
+        const SizedBox(width: 8),
+        Text('声光猎蚊 · $_status',
+            style: TextStyle(color: accent, fontWeight: FontWeight.bold, letterSpacing: 2)),
+        const Spacer(),
+        _chip(Icons.mic, '麦克风', _radarOn),
+        const SizedBox(width: 8),
+        _chip(Icons.videocam, '视觉', _cameraOn),
+        const SizedBox(width: 8),
+        _chip(Icons.flash_on, '补光', _torchOn),
+      ]),
     );
   }
 
@@ -418,83 +374,53 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
         border: Border.all(color: on ? Colors.greenAccent : Colors.grey),
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: on ? Colors.greenAccent : Colors.grey),
-          const SizedBox(width: 4),
-          Text(label, style: TextStyle(color: on ? Colors.greenAccent : Colors.grey, fontSize: 12)),
-        ],
-      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 14, color: on ? Colors.greenAccent : Colors.grey),
+        const SizedBox(width: 4),
+        Text(label, style: TextStyle(color: on ? Colors.greenAccent : Colors.grey, fontSize: 12)),
+      ]),
     );
   }
 
   Widget _buildRadarPanel() {
     return Padding(
       padding: const EdgeInsets.all(12.0),
-      child: Column(
-        children: [
-          Expanded(
-            child: RadarView(
-              target: _target,
-              pulse: _pulse || _target.distance > 0.6,
-              directionText: _direction,
-            ),
+      child: Column(children: [
+        Expanded(
+          child: RadarView(
+            target: _target,
+            pulse: _pulse || _target.distance > 0.6,
+            directionText: _direction,
           ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: _energyBar('L', _leftEnergy, Colors.cyanAccent),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _energyBar('R', _rightEnergy, Colors.pinkAccent),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              Text('距离: ${(_target.distance * 100).toStringAsFixed(0)}%',
-                  style: const TextStyle(color: Colors.white70)),
-              Text('方位: ${(_target.azimuth * 180 / 3.14159).toStringAsFixed(1)}°',
-                  style: const TextStyle(color: Colors.white70)),
-            ],
-          ),
-        ],
-      ),
+        ),
+        const SizedBox(height: 8),
+        Row(children: [
+          Expanded(child: _energyBar('L', _leftEnergy, Colors.cyanAccent)),
+          const SizedBox(width: 8),
+          Expanded(child: _energyBar('R', _rightEnergy, Colors.pinkAccent)),
+        ]),
+        const SizedBox(height: 8),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+          Text('距离: ${(_target.distance * 100).toStringAsFixed(0)}%', style: const TextStyle(color: Colors.white70)),
+          Text('方位: ${(_target.azimuth * 180 / 3.14159).toStringAsFixed(1)}°', style: const TextStyle(color: Colors.white70))
+      )),
     );
   }
 
   Widget _energyBar(String label, double value, Color color) {
     final v = value.clamp(0.0, 1.0);
-    return Row(
-      children: [
-        SizedBox(width: 24, child: Text(label, style: const TextStyle(color: Colors.white54))),
-        const SizedBox(width: 4),
-        Expanded(
-          child: Container(
-            height: 10,
-            decoration: BoxDecoration(
-              color: Colors.white10,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: FractionallySizedBox(
-              alignment: Alignment.centerLeft,
-              widthFactor: v,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: color,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
+    return Row(children: [
+      SizedBox(width: 24, child: Text(label, style: const TextStyle(color: Colors.white54))),
+      const SizedBox(width: 4),
+      Expanded(child: Container(
+        height: 10,
+        decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(4)),
+        child: FractionallySizedBox(
+          alignment: Alignment.centerLeft,
+          widthFactor: v,
+          child: Container(decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(4))),
+      )),
+    ]);
   }
 
   Widget _buildCameraPanel() {
@@ -502,10 +428,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
       padding: const EdgeInsets.all(12.0),
       child: Column(
         children: [
-          const Text(
-            '视觉运动侦测',
-            style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
-          ),
+          const Text('视觉运动侦测', style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           Expanded(
             child: ClipRRect(
@@ -521,10 +444,8 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
             ),
           ),
           const SizedBox(height: 8),
-          Text(
-            '运动区域: ${_rects.length}   帧: ${_frameW}×${_frameH}',
-            style: const TextStyle(color: Colors.white70, fontSize: 12),
-          ),
+          Text('运动区域: ${_rects.length}   帧: ${_frameW}×${_frameH}',
+              style: const TextStyle(color: Colors.white70, fontSize: 12)),
         ],
       ),
     );
@@ -533,45 +454,41 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   Widget _buildMotionOverlay() {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final w = constraints.maxWidth;
-        final h = constraints.maxHeight;
-        final scaleX = w / _frameW;
-        final scaleY = h / _frameH;
-        // draw background stripes + rects
-        return Stack(
-          children: [
-            Positioned.fill(
-              child: CustomPaint(
-                painter: _ScanlinesPainter(),
-              ),
-            ),
-            ..._rects.map((r) {
-              return Positioned(
-                left: r.left * scaleX,
-                top: r.top * scaleY,
-                width: (r.right - r.left + 1) * scaleX,
-                height: (r.bottom - r.top + 1) * scaleY,
-                child: Container(
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.redAccent, width: 2),
-                    color: Colors.redAccent.withOpacity(0.15),
-                  ),
+      final w = constraints.maxWidth;
+      final h = constraints.maxHeight;
+      final scaleX = w / _frameW;
+      final scaleY = h / _frameH;
+      return Stack(
+        children: [
+          Positioned.fill(
+            child: CustomPaint(painter: _ScanlinesPainter()),
+          ),
+          ..._rects.map((r) {
+            return Positioned(
+              left: r.left * scaleX,
+              top: r.top * scaleY,
+              width: (r.right - r.left + 1) * scaleX,
+              height: (r.bottom - r.top + 1) * scaleY,
+              child: Container(
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.redAccent, width: 2),
+                  color: Colors.redAccent.withOpacity(0.15),
                 ),
               );
             }),
-            if (_rects.isEmpty)
-              const Positioned.fill(
-                child: Center(
-                  child: Text('未检测到运动', style: TextStyle(color: Colors.white30)),
-                ),
+          if (_rects.isEmpty)
+            const Positioned.fill(
+              child: Center(
+                child: Text('未检测到运动', style: TextStyle(color: Colors.white30)),
               ),
-          ],
-        );
-      },
-    );
-  }
+            ),
+        ],
+      );
+    },
+  );
+}
 
-  Widget _buildControls() {
+Widget _buildControls() {
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Row(
@@ -580,7 +497,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
           _ctrlButton(
             icon: Icons.flashlight_on,
             label: '手电筒',
-            on: _torchOn,
+            on: false,
             onPressed: _toggleTorch,
             color: Colors.yellowAccent,
           ),
@@ -601,7 +518,6 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
               } else {
                 await _startRadar();
               }
-              setState(() {});
             },
             color: Colors.greenAccent,
           ),
@@ -615,7 +531,6 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
               } else {
                 await _startCamera();
               }
-              setState(() {});
             },
             color: Colors.cyanAccent,
           ),
@@ -640,15 +555,11 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
           border: Border.all(color: on ? color : Colors.white24),
           borderRadius: BorderRadius.circular(16),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: on ? color : Colors.white70, size: 22),
-            const SizedBox(height: 4),
-            Text(label, style: TextStyle(color: on ? color : Colors.white70, fontSize: 12)),
-          ],
-        ),
-      ),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, color: on ? color : Colors.white70, size: 22),
+          const SizedBox(height: 4),
+          Text(label, style: TextStyle(color: on ? color : Colors.white70, fontSize: 12)),
+        ]),
     );
   }
 }
@@ -656,9 +567,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
 class _ScanlinesPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.greenAccent.withOpacity(0.06)
-      ..strokeWidth = 1;
+    final paint = Paint()..color = Colors.greenAccent.withOpacity(0.06)..strokeWidth = 1;
     for (var y = 0; y < size.height; y += 3) {
       canvas.drawLine(Offset(0, y.toDouble()), Offset(size.width, y.toDouble()), paint);
     }
@@ -666,12 +575,4 @@ class _ScanlinesPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-/// Platform-specific (Android) wake-lock orientation setup.
-/// Called implicitly by the native layer; this Dart extension exists only for
-/// clarity.
-@immutable
-class PlatformOverrides {
-  const PlatformOverrides._();
 }

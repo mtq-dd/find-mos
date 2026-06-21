@@ -4,6 +4,7 @@
         <item name="android:windowBackground">@drawable/launch_background</item>
     </style>
     <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
-        <item name="android:windowBackground">?android:windowBackground</item>
+        <item name="android:windowBackground">@color/background_color</item>
     </style>
+    <color name="background_color">#0b1a14</color>
 </resources>

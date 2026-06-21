@@ -1,6 +1,6 @@
 name: find_mos
 description: 声光猎蚊 — 基于声学雷达与视觉运动侦测的蚊子定位工具
-publish_to: 'none'
+publish_to: "none"
 version: 1.0.0+1
 
 environment:
@@ -10,12 +10,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  permission_handler: ^11.0.0
+  permission_handler: ^11.3.1
 
 dev_dependencies:
-  flutter_test:
-    sdk: flutter
-  flutter_lints: ^3.0.0
+  flutter_lints: ^4.0.0
 
 flutter:
   uses-material-design: true
