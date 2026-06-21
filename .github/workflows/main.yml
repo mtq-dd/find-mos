@@ -36,26 +36,50 @@ jobs:
           flutter-version: 3.24.x
           cache: true
 
-      - name: Generate Gradle wrapper
+      - name: Create android/local.properties pointing to Android SDK
         run: |
-          cd android
-          curl -sL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.10.2-bin.zip
-          mkdir -p /tmp/gradle-install
-          unzip -qo /tmp/gradle.zip -d /tmp/gradle-install
-          /tmp/gradle-install/gradle-8.10.2/bin/gradle wrapper --gradle-version 8.10.2
-          ls -la gradle/wrapper/
+          # Prefer ANDROID_SDK_ROOT, fallback to ANDROID_HOME, then $HOME/Android/Sdk
+          SDK_PATH="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
+          echo "Detected ANDROID_SDK_ROOT='$ANDROID_SDK_ROOT' ANDROID_HOME='$ANDROID_HOME'"
+          echo "Using SDK_PATH='$SDK_PATH'"
+          if [ ! -d "$SDK_PATH" ]; then
+            echo "Android SDK not found at $SDK_PATH"
+            echo "Environment: ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT ANDROID_HOME=$ANDROID_HOME"
+            # Print some common locations for debugging
+            ls -la /usr/lib || true
+            ls -la /usr/local || true
+            ls -la $HOME || true
+            exit 1
+          fi
+          # Write local.properties in android/ so Gradle can find sdk.dir
+          echo "sdk.dir=$SDK_PATH" > android/local.properties
+          echo "Created android/local.properties:"
+          cat android/local.properties
 
-      - name: Dart pub get
-        run: dart pub get
+      - name: Ensure android/gradlew is executable & show Gradle version
+        run: |
+          if [ -f android/gradlew ]; then
+            chmod +x android/gradlew
+            echo "Gradle wrapper found; printing version:"
+            cd android
+            ./gradlew --version
+            cd ..
+          else
+            echo "android/gradlew not found — please commit the Gradle wrapper (recommended)."
+            exit 1
+          fi
+
+      - name: Flutter pub get
+        run: flutter pub get
 
       - name: Flutter doctor
         run: flutter doctor -v
 
       - name: Build debug APK
-        run: flutter build apk --debug --no-pub
+        run: flutter build apk --debug
 
       - name: Build release APK (unsigned)
-        run: flutter build apk --release --no-pub
+        run: flutter build apk --release
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
