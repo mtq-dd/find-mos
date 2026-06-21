@@ -586,14 +586,30 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
     private inner class CameraRunnable : Runnable {
         private var tick = 0
+        private val rand = java.util.Random()
 
         override fun run() {
             if (!cameraRunning) return
             tick++
+            // 绘制一个水平移动的亮条 + 噪声纹理
+            // 亮条每帧移动 CAM_WIDTH/20 ≈ 8 像素，确保帧间变化足够触发运动检测
+            val barPos = (tick * 8) % CAM_WIDTH
             val luma = IntArray(CAM_WIDTH * CAM_HEIGHT) { idx ->
-                val bar = (tick * 2 + idx % CAM_WIDTH) % CAM_WIDTH
-                val dx = kotlin.math.abs((idx % CAM_WIDTH) - bar)
-                if (dx < 4) 220 else 100
+                val x = idx % CAM_WIDTH
+                val y = idx / CAM_WIDTH
+                val dx = kotlin.math.abs(x - barPos)
+                // 基础纹理：每 4 行交替亮度
+                val base = 60 + ((y / 4) % 3) * 15
+                // 亮条区域（宽度约 16 像素）
+                val barVal = if (dx < 12) {
+                    val fade = 1.0 - dx.toDouble() / 12.0
+                    220 - (1 - fade) * 100
+                } else {
+                    0.0
+                }
+                // 小随机扰动
+                val noise = rand.nextInt(12) - 6
+                (base + barVal + noise).toInt().coerceIn(0, 255)
             }
             val sink = cameraSink
             if (sink != null) {

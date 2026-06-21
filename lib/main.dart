@@ -172,6 +172,9 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   List<MotionRect> _rects = const <MotionRect>[];
   int _frameW = 160;
   int _frameH = 90;
+  Uint8List? _lumaBytes;
+  int _cameraFrameCount = 0;
+  int _radarFrameCount = 0;
 
   bool _pulse = false;
   Timer? _pulseTimer;
@@ -281,6 +284,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
       _status = _rects.isNotEmpty ? '检测到运动' : status;
       _leftEnergy = lE;
       _rightEnergy = rE;
+      _radarFrameCount++;
       if (distance > 0.6) _triggerPulse();
     });
   }
@@ -291,12 +295,20 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     final h = (map['height'] as int?) ?? 90;
     final luma = (map['luma'] as List<dynamic>?)?.cast<int>() ?? const <int>[];
     if (_motion == null || _motion!.width != w || _motion!.height != h) {
-      _motion = MotionDetector(width: w, height: h, threshold: 25, minArea: 5, maxArea: 200);
+      _motion = MotionDetector(width: w, height: h, threshold: 25, minArea: 5, maxArea: 500);
       _frameW = w;
       _frameH = h;
     }
+    // 保存亮度数据用于渲染
+    final bytes = Uint8List(w * h);
+    final len = luma.length.clamp(0, w * h);
+    for (var i = 0; i < len; i++) {
+      bytes[i] = luma[i] & 0xFF;
+    }
     final rects = _motion!.detect(luma);
     setState(() {
+      _lumaBytes = bytes;
+      _cameraFrameCount++;
       _rects = rects;
       if (_rects.isNotEmpty && _status != '目标接近') _status = '检测到运动';
     });
@@ -417,16 +429,23 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
           Expanded(child: _energyBar('R', _rightEnergy, Colors.pinkAccent)),
         ]),
         const SizedBox(height: 8),
-        Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-          Text(
-            '距离: ${(_target.distance * 100).toStringAsFixed(0)}%',
-            style: const TextStyle(color: Colors.white70),
-          ),
-          Text(
-            '方位: ${(_target.azimuth * 180 / 3.14159).toStringAsFixed(1)}°',
-            style: const TextStyle(color: Colors.white70),
-          ),
-        ]),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            Text(
+              '距离: ${(_target.distance * 100).toStringAsFixed(0)}%',
+              style: const TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+            Text(
+              '方位: ${(_target.azimuth * 180 / 3.14159).toStringAsFixed(1)}°',
+              style: const TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+            Text(
+              '雷达帧: $_radarFrameCount',
+              style: const TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+          ],
+        ),
       ]),
     );
   }
@@ -480,7 +499,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
           ),
           const SizedBox(height: 8),
           Text(
-            '运动区域: ${_rects.length}   帧: ${_frameW}×${_frameH}',
+            '运动: ${_rects.length}   帧: ${_frameW}×${_frameH}   图像帧数: $_cameraFrameCount',
             style: const TextStyle(color: Colors.white70, fontSize: 12),
           ),
         ],
@@ -497,6 +516,15 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
         final scaleY = h / _frameH;
         return Stack(
           children: [
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _GrayscalePainter(
+                  luma: _lumaBytes,
+                  width: _frameW,
+                  height: _frameH,
+                ),
+              ),
+            ),
             Positioned.fill(child: CustomPaint(painter: _ScanlinesPainter())),
             ..._rects.map((r) {
               return Positioned(
@@ -507,15 +535,21 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
                 child: Container(
                   decoration: BoxDecoration(
                     border: Border.all(color: Colors.redAccent, width: 2),
-                    color: Colors.redAccent.withOpacity(0.15),
+                    color: Colors.redAccent.withOpacity(0.2),
                   ),
                 ),
               );
             }),
-            if (_rects.isEmpty)
+            if (_rects.isEmpty && _lumaBytes != null)
               const Positioned.fill(
                 child: Center(
                   child: Text('未检测到运动', style: TextStyle(color: Colors.white30)),
+                ),
+              ),
+            if (_lumaBytes == null)
+              const Positioned.fill(
+                child: Center(
+                  child: Text('等待图像数据…', style: TextStyle(color: Colors.white54)),
                 ),
               ),
           ],
@@ -605,13 +639,52 @@ class _ScanlinesPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = Colors.greenAccent.withOpacity(0.06)
+      ..color = Colors.greenAccent.withOpacity(0.08)
       ..strokeWidth = 1;
-    for (var y = 0; y < size.height; y += 3) {
+    for (var y = 0; y < size.height; y += 4) {
       canvas.drawLine(Offset(0, y.toDouble()), Offset(size.width, y.toDouble()), paint);
     }
   }
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _GrayscalePainter extends CustomPainter {
+  final Uint8List? luma;
+  final int width;
+  final int height;
+
+  _GrayscalePainter({required this.luma, required this.width, required this.height});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final data = luma;
+    if (data == null || data.isEmpty) return;
+    final pxW = size.width / width;
+    final pxH = size.height / height;
+    // 降采样绘制：每几像素画一个矩形，避免14400个drawRect
+    final stepX = 1;
+    final stepY = 1;
+    final paint = Paint()..style = PaintingStyle.fill;
+    for (var y = 0; y < height; y += stepY) {
+      for (var x = 0; x < width; x += stepX) {
+        final idx = y * width + x;
+        if (idx >= data.length) continue;
+        final v = data[idx];
+        // 调整对比度，让画面更有层次感
+        final adjusted = ((v - 80) * 1.4).clamp(0.0, 255.0).toInt();
+        paint.color = Color.fromARGB(255, adjusted, adjusted, adjusted);
+        canvas.drawRect(
+          Rect.fromLTWH(x * pxW, y * pxH, pxW + 0.5, pxH + 0.5),
+          paint,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _GrayscalePainter oldDelegate) {
+    return oldDelegate.luma != luma;
+  }
 }
