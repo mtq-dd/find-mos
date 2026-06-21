@@ -672,9 +672,7 @@ class _GrayscalePainter extends CustomPainter {
         final idx = y * width + x;
         if (idx >= data.length) continue;
         final v = data[idx];
-        // 调整对比度，让画面更有层次感
-        final adjusted = ((v - 80) * 1.4).clamp(0.0, 255.0).toInt();
-        paint.color = Color.fromARGB(255, adjusted, adjusted, adjusted);
+        paint.color = Color.fromARGB(255, v, v, v);
         canvas.drawRect(
           Rect.fromLTWH(x * pxW, y * pxH, pxW + 0.5, pxH + 0.5),
           paint,

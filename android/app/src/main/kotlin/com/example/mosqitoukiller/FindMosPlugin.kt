@@ -67,6 +67,14 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     private var cameraHandler: Handler? = null
     private var cameraRunning = false
 
+    private var cameraManager: android.hardware.camera2.CameraManager? = null
+    private var cameraDevice: android.hardware.camera2.CameraDevice? = null
+    private var captureSession: android.hardware.camera2.CameraCaptureSession? = null
+    private var imageReader: android.media.ImageReader? = null
+    private var cameraId: String? = null
+    private var camNativeWidth = CAM_WIDTH
+    private var camNativeHeight = CAM_HEIGHT
+
     private var torchCameraId: String? = null
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
@@ -568,65 +576,210 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
     private fun startCameraStream(): Boolean {
         if (cameraRunning) return true
-        cameraRunning = true
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+            != PackageManager.PERMISSION_GRANTED) {
+            Log.w(TAG, "No camera permission")
+            return false
+        }
+
+        val cm = context.getSystemService(Context.CAMERA_SERVICE) as? android.hardware.camera2.CameraManager
+        if (cm == null) {
+            Log.e(TAG, "CameraManager unavailable")
+            return false
+        }
+        cameraManager = cm
+
+        // 选择后置摄像头
+        var chosenId: String? = null
+        for (id in cm.cameraIdList) {
+            val chars = cm.getCameraCharacteristics(id)
+            val facing = chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)
+            if (facing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK) {
+                chosenId = id
+                break
+            }
+        }
+        if (chosenId == null && cm.cameraIdList.isNotEmpty()) {
+            chosenId = cm.cameraIdList[0]
+        }
+        if (chosenId == null) {
+            Log.e(TAG, "No camera available")
+            return false
+        }
+        cameraId = chosenId
+
+        // 获取该摄像头支持的输出尺寸（用于 ImageReader）
+        val chars = cm.getCameraCharacteristics(chosenId)
+        val configMap = chars.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        if (configMap != null) {
+            val sizes = configMap.getOutputSizes(android.graphics.ImageFormat.YUV_420_888)
+            if (sizes != null && sizes.isNotEmpty()) {
+                // 选择最接近 320x180 的尺寸，既节省性能又能有足够信息量
+                val target = 320 * 180
+                var bestSize = sizes[0]
+                var bestDiff = Long.MAX_VALUE
+                for (s in sizes) {
+                    val product = s.width.toLong() * s.height.toLong()
+                    val diff = kotlin.math.abs(product - target)
+                    if (diff < bestDiff) {
+                        bestDiff = diff
+                        bestSize = s
+                    }
+                }
+                camNativeWidth = bestSize.width
+                camNativeHeight = bestSize.height
+            }
+        }
+        Log.i(TAG, "Camera output size: ${camNativeWidth}x$camNativeHeight")
+
+        // 启动后台线程
         val thread = HandlerThread("findmos-camera").apply { start() }
         cameraThread = thread
         cameraHandler = Handler(thread.looper)
-        cameraHandler?.post(CameraRunnable())
+
+        // 创建 ImageReader，读取 YUV420_888
+        val reader = android.media.ImageReader.newInstance(
+            camNativeWidth,
+            camNativeHeight,
+            android.graphics.ImageFormat.YUV_420_888,
+            2,
+        )
+        imageReader = reader
+        reader.setOnImageAvailableListener(CameraFrameListener(), cameraHandler)
+
+        // 打开相机
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                cm.openCamera(chosenId, { executor -> cameraHandler?.post(executor) }, CameraStateCallback())
+            } else {
+                cm.openCamera(chosenId, CameraStateCallback(), cameraHandler)
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "openCamera failed", t)
+            cameraRunning = false
+            return false
+        }
+        cameraRunning = true
         return true
     }
 
     private fun stopCameraStream() {
         cameraRunning = false
         cameraHandler?.removeCallbacksAndMessages(null)
+        try { captureSession?.abortCaptures() } catch (_: Throwable) {}
+        try { captureSession?.close() } catch (_: Throwable) {}
+        captureSession = null
+        try { cameraDevice?.close() } catch (_: Throwable) {}
+        cameraDevice = null
+        try { imageReader?.close() } catch (_: Throwable) {}
+        imageReader = null
         try { cameraThread?.quitSafely() } catch (_: Throwable) {}
         cameraThread = null
         cameraHandler = null
     }
 
-    private inner class CameraRunnable : Runnable {
-        private var tick = 0
-        private val rand = java.util.Random()
+    private inner class CameraStateCallback : android.hardware.camera2.CameraDevice.StateCallback() {
+        override fun onOpened(camera: android.hardware.camera2.CameraDevice) {
+            cameraDevice = camera
+            val reader = imageReader ?: return
+            val surface = reader.surface
+            try {
+                camera.createCaptureSession(
+                    listOf(surface),
+                    object : android.hardware.camera2.CameraCaptureSession.StateCallback() {
+                        override fun onConfigured(session: android.hardware.camera2.CameraCaptureSession) {
+                            captureSession = session
+                            val requestBuilder = camera.createCaptureRequest(
+                                android.hardware.camera2.CameraDevice.TEMPLATE_PREVIEW,
+                            )
+                            requestBuilder.addTarget(surface)
+                            // 自动曝光
+                            try {
+                                requestBuilder.set(
+                                    android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE,
+                                    android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE_ON,
+                                )
+                            } catch (_: Throwable) {}
+                            try {
+                                session.setRepeatingRequest(requestBuilder.build(), null, cameraHandler)
+                            } catch (t: Throwable) {
+                                Log.e(TAG, "setRepeatingRequest failed", t)
+                            }
+                        }
 
-        override fun run() {
+                        override fun onConfigureFailed(session: android.hardware.camera2.CameraCaptureSession) {
+                            Log.e(TAG, "Camera capture session configure failed")
+                        }
+                    },
+                    cameraHandler,
+                )
+            } catch (t: Throwable) {
+                Log.e(TAG, "createCaptureSession failed", t)
+            }
+        }
+
+        override fun onDisconnected(camera: android.hardware.camera2.CameraDevice) {
+            try { camera.close() } catch (_: Throwable) {}
+            if (cameraDevice === camera) cameraDevice = null
+        }
+
+        override fun onError(camera: android.hardware.camera2.CameraDevice, error: Int) {
+            Log.e(TAG, "Camera error: $error")
+            try { camera.close() } catch (_: Throwable) {}
+            if (cameraDevice === camera) cameraDevice = null
+        }
+    }
+
+    private inner class CameraFrameListener : android.media.ImageReader.OnImageAvailableListener {
+        override fun onImageAvailable(reader: android.media.ImageReader) {
             if (!cameraRunning) return
-            tick++
-            // 绘制一个水平移动的亮条 + 噪声纹理
-            // 亮条每帧移动 CAM_WIDTH/20 ≈ 8 像素，确保帧间变化足够触发运动检测
-            val barPos = (tick * 8) % CAM_WIDTH
-            val luma = IntArray(CAM_WIDTH * CAM_HEIGHT) { idx ->
-                val x = idx % CAM_WIDTH
-                val y = idx / CAM_WIDTH
-                val dx = kotlin.math.abs(x - barPos)
-                // 基础纹理：每 4 行交替亮度
-                val base = 60 + ((y / 4) % 3) * 15
-                // 亮条区域（宽度约 16 像素）
-                val barVal = if (dx < 12) {
-                    val fade = 1.0 - dx.toDouble() / 12.0
-                    220 - (1 - fade) * 100
-                } else {
-                    0.0
-                }
-                // 小随机扰动
-                val noise = rand.nextInt(12) - 6
-                (base + barVal + noise).toInt().coerceIn(0, 255)
+            val image = try { reader.acquireLatestImage() } catch (t: Throwable) {
+                Log.w(TAG, "acquireLatestImage failed", t)
+                return
             }
-            val sink = cameraSink
-            if (sink != null) {
-                try {
-                    sink.success(
-                        mapOf(
-                            "width" to CAM_WIDTH,
-                            "height" to CAM_HEIGHT,
-                            "luma" to luma,
-                            "format" to "NV21_Y",
-                        ),
-                    )
-                } catch (t: Throwable) {
-                    Log.w(TAG, "cameraSink send failed", t)
+            if (image == null) return
+
+            try {
+                // Y 平面（YUV_420_888 的第一个平面）
+                val yPlane = image.planes[0]
+                val buffer = yPlane.buffer
+                val yRowStride = yPlane.rowStride
+                val yPixelStride = yPlane.pixelStride
+                val srcW = image.width
+                val srcH = image.height
+
+                // 缩放到 CAM_WIDTH x CAM_HEIGHT（等间隔采样）
+                val luma = IntArray(CAM_WIDTH * CAM_HEIGHT)
+                for (dy in 0 until CAM_HEIGHT) {
+                    val sy = (dy * srcH / CAM_HEIGHT).coerceIn(0, srcH - 1)
+                    for (dx in 0 until CAM_WIDTH) {
+                        val sx = (dx * srcW / CAM_WIDTH).coerceIn(0, srcW - 1)
+                        val byteIdx = sy * yRowStride + sx * yPixelStride
+                        val v = buffer.get(byteIdx).toInt() and 0xFF
+                        luma[dy * CAM_WIDTH + dx] = v
+                    }
                 }
+
+                val sink = cameraSink
+                if (sink != null) {
+                    try {
+                        sink.success(
+                            mapOf(
+                                "width" to CAM_WIDTH,
+                                "height" to CAM_HEIGHT,
+                                "luma" to luma,
+                                "format" to "YUV420_Y",
+                            ),
+                        )
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "cameraSink send failed", t)
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "process camera frame failed", t)
+            } finally {
+                try { image.close() } catch (_: Throwable) {}
             }
-            cameraHandler?.postDelayed(this, CAM_PERIOD_MS)
         }
     }
 }
