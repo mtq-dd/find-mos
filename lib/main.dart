@@ -1,10 +1,11 @@
 import 'dart:async';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import 'fft.dart';
 import 'motion.dart';
 import 'radar.dart';
 
@@ -172,7 +173,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   List<MotionRect> _rects = const <MotionRect>[];
   int _frameW = 160;
   int _frameH = 90;
-  Uint8List? _lumaBytes;
+  ui.Image? _cameraImage; // 预渲染的灰度图像
   int _cameraFrameCount = 0;
   int _radarFrameCount = 0;
 
@@ -267,7 +268,12 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     } on PlatformException catch (e) {
       debugPrint('stopCameraStream error: $e');
     }
-    setState(() {});
+    if (mounted) {
+      setState(() {
+        _cameraImage = null;
+        _rects = const <MotionRect>[];
+      });
+    }
   }
 
   void _onRadarEvent(dynamic event) {
@@ -289,29 +295,48 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     });
   }
 
-  void _onCameraEvent(dynamic event) {
+  void _onCameraEvent(dynamic event) async {
     final map = event as Map<dynamic, dynamic>;
     final w = (map['width'] as int?) ?? 160;
     final h = (map['height'] as int?) ?? 90;
     final luma = (map['luma'] as List<dynamic>?)?.cast<int>() ?? const <int>[];
     if (_motion == null || _motion!.width != w || _motion!.height != h) {
-      _motion = MotionDetector(width: w, height: h, threshold: 25, minArea: 5, maxArea: 500);
+      _motion = MotionDetector(width: w, height: h, threshold: 20, minArea: 3, maxArea: 1000);
       _frameW = w;
       _frameH = h;
     }
-    // 保存亮度数据用于渲染
-    final bytes = Uint8List(w * h);
-    final len = luma.length.clamp(0, w * h);
-    for (var i = 0; i < len; i++) {
-      bytes[i] = luma[i] & 0xFF;
-    }
+    // 运动检测
     final rects = _motion!.detect(luma);
-    setState(() {
-      _lumaBytes = bytes;
-      _cameraFrameCount++;
-      _rects = rects;
-      if (_rects.isNotEmpty && _status != '目标接近') _status = '检测到运动';
-    });
+
+    // 构建 RGBA 图像（用于 RawImage 渲染，大幅提升性能）
+    final pixels = Uint8List(w * h * 4);
+    for (var i = 0; i < luma.length && i < w * h; i++) {
+      final v = luma[i] & 0xFF;
+      final p = i * 4;
+      pixels[p] = v;           // R
+      pixels[p + 1] = v;       // G
+      pixels[p + 2] = v;       // B
+      pixels[p + 3] = 255;     // A
+    }
+
+    final imageCompleter = Completer<ui.Image>();
+    ui.decodeImageFromPixels(
+      pixels,
+      w,
+      h,
+      ui.PixelFormat.rgba8888,
+      (img) => imageCompleter.complete(img),
+    );
+    final img = await imageCompleter.future;
+
+    if (mounted) {
+      setState(() {
+        _cameraImage = img;
+        _cameraFrameCount++;
+        _rects = rects;
+        if (_rects.isNotEmpty && _status != '目标接近') _status = '检测到运动';
+      });
+    }
   }
 
   void _triggerPulse() {
@@ -517,13 +542,14 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
         return Stack(
           children: [
             Positioned.fill(
-              child: CustomPaint(
-                painter: _GrayscalePainter(
-                  luma: _lumaBytes,
-                  width: _frameW,
-                  height: _frameH,
-                ),
-              ),
+              child: _cameraImage != null
+                  ? RawImage(image: _cameraImage, fit: BoxFit.fill)
+                  : Container(
+                      color: Colors.black,
+                      child: const Center(
+                        child: Text('等待图像数据…', style: TextStyle(color: Colors.white54)),
+                      ),
+                    ),
             ),
             Positioned.fill(child: CustomPaint(painter: _ScanlinesPainter())),
             ..._rects.map((r) {
@@ -540,16 +566,10 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
                 ),
               );
             }),
-            if (_rects.isEmpty && _lumaBytes != null)
+            if (_rects.isEmpty && _cameraImage != null)
               const Positioned.fill(
                 child: Center(
                   child: Text('未检测到运动', style: TextStyle(color: Colors.white30)),
-                ),
-              ),
-            if (_lumaBytes == null)
-              const Positioned.fill(
-                child: Center(
-                  child: Text('等待图像数据…', style: TextStyle(color: Colors.white54)),
                 ),
               ),
           ],
@@ -648,41 +668,4 @@ class _ScanlinesPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-class _GrayscalePainter extends CustomPainter {
-  final Uint8List? luma;
-  final int width;
-  final int height;
-
-  _GrayscalePainter({required this.luma, required this.width, required this.height});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final data = luma;
-    if (data == null || data.isEmpty) return;
-    final pxW = size.width / width;
-    final pxH = size.height / height;
-    // 降采样绘制：每几像素画一个矩形，避免14400个drawRect
-    final stepX = 1;
-    final stepY = 1;
-    final paint = Paint()..style = PaintingStyle.fill;
-    for (var y = 0; y < height; y += stepY) {
-      for (var x = 0; x < width; x += stepX) {
-        final idx = y * width + x;
-        if (idx >= data.length) continue;
-        final v = data[idx];
-        paint.color = Color.fromARGB(255, v, v, v);
-        canvas.drawRect(
-          Rect.fromLTWH(x * pxW, y * pxH, pxW + 0.5, pxH + 0.5),
-          paint,
-        );
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _GrayscalePainter oldDelegate) {
-    return oldDelegate.luma != luma;
-  }
 }
