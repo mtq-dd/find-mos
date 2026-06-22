@@ -170,6 +170,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   List<MotionRect> _rects = const <MotionRect>[];
   int? _cameraTextureId; // Flutter Texture ID
   int _cameraFrameCount = 0;
+  int _sensorOrientation = 0; // 摄像头传感器方向（度），0/90/180/270
   int _radarFrameCount = 0;
 
   bool _pulse = false;
@@ -294,10 +295,11 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   void _onCameraEvent(dynamic event) async {
     final map = event as Map<dynamic, dynamic>;
     final frameCount = (map['frameCount'] as int?) ?? 0;
+    final sensorOri = (map['sensorOrientation'] as int?) ?? 0;
     final motionPixels = (map['motionPixels'] as int?) ?? 0;
     final rawRects = (map['rects'] as List<dynamic>?) ?? const <dynamic>[];
 
-    final rects = rawRects.map((r) {
+    final rects = rawRects.map<MotionRect>((r) {
       final m = r as Map<dynamic, dynamic>;
       final left = ((m['left'] as num?)?.toDouble() ?? 0) * 100;
       final top = ((m['top'] as num?)?.toDouble() ?? 0) * 100;
@@ -317,6 +319,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     if (mounted) {
       setState(() {
         _cameraFrameCount = frameCount;
+        if (sensorOri != 0) _sensorOrientation = sensorOri;
         _rects = rects;
         if (_rects.isNotEmpty && _status != '目标接近') _status = '检测到运动';
       });
@@ -600,11 +603,20 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
       builder: (context, constraints) {
         final scaleX = constraints.maxWidth / 100;
         final scaleY = constraints.maxHeight / 100;
+        // sensorOrientation 通常为 90（后置摄像头），需要逆时针转 90 度才能在横屏 UI 中显示正常
+        final needRotate = _sensorOrientation != 0;
+        final radians = needRotate ? -_sensorOrientation * 3.141592653589793 / 180.0 : 0.0;
         return Stack(
           children: [
             Positioned.fill(
               child: _cameraTextureId != null
-                  ? FittedBox(fit: BoxFit.fill, child: SizedBox(width: 1, height: 1, child: Texture(textureId: _cameraTextureId!)))
+                  ? Transform.rotate(
+                      angle: radians,
+                      child: FittedBox(
+                        fit: BoxFit.contain,
+                        child: SizedBox(width: 1, height: 1, child: Texture(textureId: _cameraTextureId!)),
+                      ),
+                    )
                   : Container(
                       color: Colors.black,
                       child: const Center(

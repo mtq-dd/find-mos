@@ -157,6 +157,8 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         }
     }
 
+    private var sensorOrientation = 0
+
     override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
             "startRadar" -> {
@@ -663,8 +665,10 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         }
         cameraId = chosenId
 
-        // 获取该摄像头支持的输出尺寸
+        // 获取该摄像头支持的输出尺寸和传感器方向
         val chars = cm.getCameraCharacteristics(chosenId)
+        sensorOrientation = chars.get(android.hardware.camera2.CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        CrashHandler.appendRuntime("Camera", "sensorOrientation=$sensorOrientation")
         val configMap = chars.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         if (configMap != null) {
             val sizes = configMap.getOutputSizes(android.graphics.ImageFormat.YUV_420_888)
@@ -886,20 +890,21 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 }
                 prevLuma = curr
 
-                // 节流：最多每 200ms 向 Dart 发送一次运动事件
+                // 节流：最多每 100ms 向 Dart 发送一次运动事件
                 val now = System.currentTimeMillis()
-                if (now - lastEventTime > 200L) {
+                if (now - lastEventTime > 100L) {
                     lastEventTime = now
                     val sink = cameraSink
                     if (sink != null) {
                         try {
                             val map = mutableMapOf<String, Any?>(
                                 "frameCount" to frameCount,
+                                "sensorOrientation" to sensorOrientation,
                                 "subW" to subW,
                                 "subH" to subH,
                                 "motionPixels" to motionPixelCount,
                             )
-                            if (motionPixelCount > 20 && maxX >= 0) {
+                            if (motionPixelCount > 5 && maxX >= 0) {
                                 map["rects"] = listOf(
                                     mapOf(
                                         "left" to minX.toDouble() / subW,
