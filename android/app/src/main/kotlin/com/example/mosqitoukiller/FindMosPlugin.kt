@@ -866,12 +866,16 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 Log.w(TAG, "acquireLatestImage failed", t)
                 return
             }
-            if (image == null) return
+            if (image == null) {
+                // image==null 说明 ImageReader 队列积压未及时消费（不一定是错误）
+                return
+            }
 
             try {
                 frameCount++
-                if (frameCount == 1) CrashHandler.appendRuntime("Camera", "First frame received!")
+                if (frameCount == 1) CrashHandler.appendRuntime("Camera", "First frame received! img=${image.width}x${image.height}")
                 if (frameCount == 30) CrashHandler.appendRuntime("Camera", "30 frames received, stream is healthy")
+                if (frameCount % 300 == 0) CrashHandler.appendRuntime("Camera", "${frameCount} frames, still running")
 
                 // Y 平面
                 val yPlane = image.planes[0]
@@ -881,7 +885,7 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 val srcW = image.width
                 val srcH = image.height
 
-                // 下采样到 MOTION_WIDTH x MOTION_HEIGHT 用于轻量级运动检测
+                // 下采样到 40x22 用于轻量级运动检测
                 val subW = 40
                 val subH = 22
                 val curr = ByteArray(subW * subH)
@@ -902,7 +906,7 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 var maxX = -1
                 var maxY = -1
                 if (prev != null && prev.size == curr.size) {
-                    val threshold = 25
+                    val threshold = 10  // 降低阈值，更灵敏（原来是25）
                     for (i in curr.indices) {
                         val diff = kotlin.math.abs((curr[i].toInt() and 0xFF) - (prev[i].toInt() and 0xFF))
                         if (diff > threshold) {
@@ -918,7 +922,7 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 }
                 prevLuma = curr
 
-                // 每帧必发运动事件，不做节流限制，确保跟踪延时为0
+                // 每帧必发运动事件，不做节流限制
                 val sink = cameraSink
                 if (sink != null) {
                     try {

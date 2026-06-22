@@ -250,13 +250,15 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
       case AppLifecycleState.resumed:
         _startRadar();
         _startCamera();
+        break;
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
       case AppLifecycleState.inactive:
       case AppLifecycleState.hidden:
         _stopRadar();
-        _stopCamera();
+        _stopCameraNoAwait(); // 不等完成，防止卡住
         _methodChannel.invokeMethod<bool>('setTorch', <String, dynamic>{'on': false});
+        break;
     }
   }
 
@@ -306,6 +308,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     }
   }
 
+  // 异步版本：用于控制面板手动开关，等待 native 侧完整停止
   Future<void> _stopCamera() async {
     if (!_cameraOn) return;
     _cameraOn = false;
@@ -322,6 +325,20 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
         _rects = const <MotionRect>[];
       });
     }
+  }
+
+  // 同步版本：用于生命周期切换，不等 native 侧完成
+  void _stopCameraNoAwait() {
+    if (!_cameraOn) return;
+    _cameraOn = false;
+    _cameraTextureId = null;
+    _cameraSub?.cancel();
+    _cameraSub = null;
+    _methodChannel.invokeMethod<bool>('stopCameraStream'); // fire & forget
+    _flightPath.clear();
+    setState(() {
+      _rects = const <MotionRect>[];
+    });
   }
 
   void _onRadarEvent(dynamic event) {
