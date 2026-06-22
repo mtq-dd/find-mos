@@ -68,6 +68,9 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     private var cameraHandler: Handler? = null
     private var cameraRunning = false
 
+    // 滤镜模式：0=原色 1=热成像 2=边缘增强 3=反色
+    private var currentFilterMode = 0
+
     private var cameraManager: android.hardware.camera2.CameraManager? = null
     private var cameraDevice: android.hardware.camera2.CameraDevice? = null
     private var captureSession: android.hardware.camera2.CameraCaptureSession? = null
@@ -80,6 +83,9 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     private var textureEntry: io.flutter.view.TextureRegistry.SurfaceTextureEntry? = null
     private var surfaceTexture: android.graphics.SurfaceTexture? = null
     private var previewSurface: android.view.Surface? = null
+
+    // EGL 滤镜渲染器
+    private var eglFilterRenderer: EGLFilterRenderer? = null
 
     private var torchCameraId: String? = null
 
@@ -213,6 +219,13 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             }
             "listRuntimeLogs" -> {
                 result.success(CrashHandler.listRuntimeLogs())
+            }
+            "setFilterMode" -> {
+                val mode = call.argument<Int>("mode") ?: 0
+                currentFilterMode = mode
+                eglFilterRenderer?.filterMode = mode
+                Log.i(TAG, "Filter mode set to: $mode")
+                result.success(true)
             }
             else -> result.notImplemented()
         }
@@ -719,14 +732,24 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         }
         CrashHandler.appendRuntime("Camera", "cameraId=$chosenId, nativeSize=${camNativeWidth}x$camNativeHeight")
 
-        // 创建 SurfaceTextureEntry（供 Flutter Texture 组件直接显示）
+        // 创建 SurfaceTextureEntry（供 Flutter Texture 组件显示，作为 EGL 输出目标）
         try {
             val entry = flutterBinding.textureRegistry.createSurfaceTexture()
             val st = entry.surfaceTexture()
             st.setDefaultBufferSize(camNativeWidth, camNativeHeight)
             textureEntry = entry
             surfaceTexture = st
-            previewSurface = android.view.Surface(st)
+            // 创建输出 Surface（EGL 渲染目标 = Flutter Texture 的 Surface）
+            val outputSurface = android.view.Surface(st)
+            // 初始化 EGL 滤镜渲染器
+            val renderer = EGLFilterRenderer()
+            if (renderer.init(outputSurface, camNativeWidth, camNativeHeight)) {
+                eglFilterRenderer = renderer
+                Log.i(TAG, "EGLFilterRenderer initialized, inputSurface=${renderer.inputSurface}")
+            } else {
+                Log.w(TAG, "EGL init failed, will use original path")
+                outputSurface.release()
+            }
             CrashHandler.appendRuntime("Camera", "SurfaceTextureEntry created, textureId=${entry.id()}")
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to create SurfaceTexture", t)
@@ -782,6 +805,9 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         surfaceTexture = null
         try { textureEntry?.release() } catch (_: Throwable) {}
         textureEntry = null
+        // 释放 EGL 滤镜渲染器
+        try { eglFilterRenderer?.release() } catch (_: Throwable) {}
+        eglFilterRenderer = null
         try { cameraThread?.quitSafely() } catch (_: Throwable) {}
         cameraThread = null
         cameraHandler = null
@@ -792,12 +818,21 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             CrashHandler.appendRuntime("Camera", "CameraDevice.onOpened")
             cameraDevice = camera
             val reader = imageReader
-            val ps = previewSurface
-            if (reader == null || ps == null) return
+            val renderer = eglFilterRenderer
+            if (reader == null) return
             try {
-                // 同时输出到 SurfaceTexture（显示） 和 ImageReader（运动检测）
+                // 相机输出到：EGL 输入 Surface（滤镜处理）+ ImageReader（运动检测）
+                // 如果 EGL 未初始化，fallback 到 previewSurface
                 val surfaces = mutableListOf<android.view.Surface>()
-                surfaces.add(ps)
+                val inputSurf = renderer?.inputSurface
+                if (inputSurf != null) {
+                    surfaces.add(inputSurf)
+                    Log.i(TAG, "Camera will output to EGL inputSurface")
+                } else {
+                    // EGL 初始化失败时的 fallback
+                    val ps = previewSurface
+                    if (ps != null) surfaces.add(ps)
+                }
                 surfaces.add(reader.surface)
                 camera.createCaptureSession(
                     surfaces,
@@ -808,7 +843,12 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                                 val requestBuilder = camera.createCaptureRequest(
                                     android.hardware.camera2.CameraDevice.TEMPLATE_PREVIEW,
                                 )
-                                requestBuilder.addTarget(ps)
+                                val inputSurf2 = eglFilterRenderer?.inputSurface
+                                if (inputSurf2 != null) {
+                                    requestBuilder.addTarget(inputSurf2)
+                                } else {
+                                    previewSurface?.let { requestBuilder.addTarget(it) }
+                                }
                                 requestBuilder.addTarget(reader.surface)
                                 try {
                                     requestBuilder.set(
@@ -818,7 +858,7 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                                 } catch (_: Throwable) {}
                                 try {
                                     session.setRepeatingRequest(requestBuilder.build(), null, cameraHandler)
-                                    CrashHandler.appendRuntime("Camera", "setRepeatingRequest OK, camera stream running (2 surfaces)")
+                                    CrashHandler.appendRuntime("Camera", "setRepeatingRequest OK, EGL filter=${eglFilterRenderer != null}")
                                 } catch (t: Throwable) {
                                     CrashHandler.appendRuntime("Camera", "setRepeatingRequest failed: ${t.message}")
                                     Log.e(TAG, "setRepeatingRequest failed", t)
@@ -960,6 +1000,13 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                     }
                 }
                 prevMotion = hasMotion
+
+                // 触发 EGL 滤镜渲染（相机帧 → GPU 处理 → Flutter Texture）
+                try {
+                    eglFilterRenderer?.onFrameAvailable()
+                } catch (t: Throwable) {
+                    Log.w(TAG, "eglFilterRenderer.onFrameAvailable failed", t)
+                }
             } catch (t: Throwable) {
                 Log.w(TAG, "process camera frame failed", t)
             } finally {

@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'motion.dart';
 import 'radar.dart';
+import 'filter_mode.dart';
 
 // 飞行轨迹点：时间戳 + 归一化坐标(0-100)
 class _FlightPoint {
@@ -224,6 +225,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   bool _radarOn = false;
   bool _cameraOn = false;
   bool _torchOn = false;
+  FilterMode _filterMode = FilterMode.original;
 
   // 运动检测环形缓冲区
   final _MotionRing _motionRing = _MotionRing();
@@ -293,6 +295,45 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
       _rotationAngle = (_rotationAngle - 90 + 360) % 360;
     });
     _saveRotationAngle(_rotationAngle);
+  }
+
+  void _showFilterSelector() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0B1A14),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40, height: 4,
+              margin: const EdgeInsets.symmetric(vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            for (final mode in FilterMode.values)
+              ListTile(
+                leading: Icon(mode.icon, color: _filterMode == mode ? Colors.greenAccent : Colors.white70),
+                title: Text(mode.label, style: TextStyle(
+                  color: _filterMode == mode ? Colors.greenAccent : Colors.white70)),
+                trailing: _filterMode == mode ? const Icon(Icons.check, color: Colors.greenAccent, size: 18) : null,
+                onTap: () {
+                  setState(() => _filterMode = mode);
+                  _methodChannel.invokeMethod('setFilterMode', {'mode': mode.index});
+                  Navigator.pop(ctx);
+                },
+              ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -867,6 +908,13 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
                       on: false,
                       onPressed: _playStartle,
                       color: const Color(0xFF9B59B6),
+                    ),
+                    _ctrlButton(
+                      icon: _filterMode.icon,
+                      label: _filterMode.label,
+                      on: true,
+                      onPressed: _showFilterSelector,
+                      color: const Color(0xFFFF6B6B),
                     ),
                   ],
                 ),
