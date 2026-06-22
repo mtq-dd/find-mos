@@ -15,14 +15,14 @@
 ### Color Palette
 ```
 --bg-primary:      #050A08   // 极深军绿黑
---bg-panel:       #0A1510   // 深绿黑（面板背景）
 --accent-radar:   #00FF88   // 雷达荧光绿
 --accent-motion:  #FF6B35   // 运动检测橙红
 --accent-warn:    #FFB800   // 警告琥珀
 --text-primary:   #E0F7EF   // 冷白文字
 --text-secondary: #5A8A7A   // 次要灰绿
---border:         #1A3028   // 边框暗绿
---overlay:        rgba(5,10,8,0.72)  // 遮罩层
+--border:         rgba(0,255,136,0.25)  // 荧光绿边框（透明）
+--panel-bg:       rgba(5,10,8,0.30)  // 30% 透明度面板背景
+--panel-border:   rgba(0,255,136,0.20)  // 30% 透明度边框
 ```
 
 ### Typography
@@ -73,10 +73,10 @@
 
 ### 层级说明
 1. **Layer 0 — 背景**：相机全屏画面（Texture 组件）
-2. **Layer 1 — 扫描线**：半透明网格叠加（CustomPaint）
-3. **Layer 2 — 检测框**：运动检测矩形（Positioned overlays）
-4. **Layer 3 — 雷达 HUD**：左上角圆形雷达组件（独立 StatelessWidget）
-5. **Layer 4 — 状态栏**：底部半透明状态条
+2. **Layer 1 — 扫描线**：半透明网格叠加（CustomPaint，6% 透明度）
+3. **Layer 2 — 检测框**：运动检测矩形（橙色边框 + 半透明填充，脉冲动画）
+4. **Layer 3 — 雷达 HUD**：左上角圆形雷达（30% 透明背景，荧光绿边框+刻度线，透明主体不挡画面）
+5. **Layer 4 — 状态栏**：底部半透明状态条（30% 透明）
 6. **Layer 5 — 控制面板**：点击任意处滑出/滑入的全屏半透明面板
 
 ### 响应式策略
@@ -113,10 +113,11 @@
 
 ## 5. Component Inventory
 
-### `RadarHud` — 圆形雷达部件
+### `RadarHud` — 圆形雷达部件（透明叠加层）
 - **States**: radarOff（灰色虚线圆）、radarOn（绿色扫描线+光点）
 - **Props**: `distance`（0.0-1.0）、`azimuth`（-1.0到1.0）、`running: bool`
-- **Size**: 140×140（固定）
+- **Size**: 140×140
+- **背景**: 30% 透明 `--panel-bg`，仅留边框和刻度线，主体透明不挡相机画面
 
 ### `MotionRectOverlay` — 运动检测框
 - **States**: visible（橙色边框+填充）、fading（0.5s 渐隐）
@@ -130,7 +131,7 @@
 - 内含 `ControlChip`（带图标开关按钮）
 
 ### `StatusBar` — 底部状态栏
-- 高度 36px，始终固定在底部
+- 高度 36px，背景 `--panel-bg`（30% 透明），始终固定在底部
 
 ### `StatusChip` — 状态指示芯片
 - 圆角胶囊，左侧状态点（绿/灰/红），右侧文字
