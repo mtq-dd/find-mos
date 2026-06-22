@@ -126,15 +126,22 @@ class EGLFilterRenderer {
     var inputSurface: Surface? = null
         private set
 
-    // 当前滤镜模式
+    // 用于安全在渲染线程重建 program 的标志
+    @Volatile
+    private var needsRecreateProgram = false
+
+    // 缓存 locations，避免每帧查询
+    private var aPosLocation = -1
+    private var aTexLocation = -1
+    private var uTexLocation = -1
+    private var uResLocation = -1
+
+    // 当前滤镜模式（setter 只标记需要重建，而不直接做 GL 调用）
     var filterMode = 0
         set(value) {
             if (field != value) {
                 field = value
-                if (program != 0) {
-                    GLES20.glDeleteProgram(program)
-                    program = 0
-                }
+                needsRecreateProgram = true
             }
         }
 
@@ -303,6 +310,13 @@ class EGLFilterRenderer {
         // 可以删掉 shader 了（已经链接进 program）
         GLES20.glDeleteShader(vs)
         GLES20.glDeleteShader(fs)
+
+        // 缓存 attribute/uniform locations，减少每帧查询
+        aPosLocation = GLES20.glGetAttribLocation(program, "aPosition")
+        aTexLocation = GLES20.glGetAttribLocation(program, "aTexCoord")
+        uTexLocation = GLES20.glGetUniformLocation(program, "uTexture")
+        uResLocation = GLES20.glGetUniformLocation(program, "uResolution")
+
         return true
     }
 
@@ -315,43 +329,65 @@ class EGLFilterRenderer {
         if (!initialized) return
 
         // 绑定 EGL 上下文 —— 必须先绑定，updateTexImage() 需要当前的 GL context
-        EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+        if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
+            Log.e("EGLFilter", "eglMakeCurrent failed in onFrameAvailable")
+            return
+        }
 
         // 更新输入纹理（相机帧 → OpenGL 纹理）
         inputSurfaceTexture?.updateTexImage()
 
-        // 如果 program 被删除（例如在 setter 切换滤镜时），在渲染线程/有 GL context 的时候尝试重新编译
-        if (program == 0) {
+        // 如果主线程标记了需要重建，由渲染线程在这里完成删除与重建
+        if (needsRecreateProgram) {
+            needsRecreateProgram = false
+
+            if (program != 0) {
+                GLES20.glDeleteProgram(program)
+                program = 0
+                // reset cached locations
+                aPosLocation = -1
+                aTexLocation = -1
+                uTexLocation = -1
+                uResLocation = -1
+            }
+
             if (!compileProgram(filterMode)) {
-                Log.e("EGLFilter", "compileProgram failed in onFrameAvailable for filterMode=$filterMode")
+                Log.e("EGLFilter", "Failed to compile program for filterMode=$filterMode")
                 return
             }
         }
 
-        // 设置视口
+        // 额外防御：如果 program 仍为 0，跳过绘制
+        if (program == 0) {
+            Log.w("EGLFilter", "Skip frame: program == 0")
+            return
+        }
+
+        // 设置视口并清屏
         GLES20.glViewport(0, 0, width, height)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
         // 使用程序
         GLES20.glUseProgram(program)
 
+        // 获取或使用缓存的 locations
+        val aPos = if (aPosLocation >= 0) aPosLocation else GLES20.glGetAttribLocation(program, "aPosition").also { aPosLocation = it }
+        val aTex = if (aTexLocation >= 0) aTexLocation else GLES20.glGetAttribLocation(program, "aTexCoord").also { aTexLocation = it }
+        val uTex = if (uTexLocation >= 0) uTexLocation else GLES20.glGetUniformLocation(program, "uTexture").also { uTexLocation = it }
+        val uRes = if (uResLocation >= 0) uResLocation else GLES20.glGetUniformLocation(program, "uResolution").also { uResLocation = it }
+
         // 顶点属性
-        val aPos = GLES20.glGetAttribLocation(program, "aPosition")
-        val aTex = GLES20.glGetAttribLocation(program, "aTexCoord")
         GLES20.glEnableVertexAttribArray(aPos)
         GLES20.glVertexAttribPointer(aPos, 2, GLES20.GL_FLOAT, false, 0, vertexBuffer)
         GLES20.glEnableVertexAttribArray(aTex)
         GLES20.glVertexAttribPointer(aTex, 2, GLES20.GL_FLOAT, false, 0, texCoordBuffer)
 
         // 纹理
-        val uTex = GLES20.glGetUniformLocation(program, "uTexture")
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        // 使用外部纹理 target
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, inputTextureId)
         GLES20.glUniform1i(uTex, 0)
 
         // 分辨率（边缘检测用）
-        val uRes = GLES20.glGetUniformLocation(program, "uResolution")
         if (uRes >= 0) {
             GLES20.glUniform2f(uRes, width.toFloat(), height.toFloat())
         }
@@ -396,5 +432,12 @@ class EGLFilterRenderer {
             EGL14.eglTerminate(eglDisplay)
             eglDisplay = EGL14.EGL_NO_DISPLAY
         }
+
+        // reset cached locations
+        aPosLocation = -1
+        aTexLocation = -1
+        uTexLocation = -1
+        uResLocation = -1
+        needsRecreateProgram = false
     }
 }
