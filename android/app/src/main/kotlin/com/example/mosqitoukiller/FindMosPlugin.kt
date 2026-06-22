@@ -50,6 +50,7 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
     private lateinit var context: Context
     private var activity: android.app.Activity? = null
+    private lateinit var flutterBinding: FlutterPlugin.FlutterPluginBinding
 
     private lateinit var methodChannel: MethodChannel
     private lateinit var radarEventChannel: EventChannel
@@ -75,10 +76,16 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     private var camNativeWidth = CAM_WIDTH
     private var camNativeHeight = CAM_HEIGHT
 
+    // SurfaceTexture 用于 Flutter Texture 组件直接显示相机预览
+    private var textureEntry: io.flutter.view.TextureRegistry.SurfaceTextureEntry? = null
+    private var surfaceTexture: android.graphics.SurfaceTexture? = null
+    private var previewSurface: android.view.Surface? = null
+
     private var torchCameraId: String? = null
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         context = flutterPluginBinding.applicationContext
+        flutterBinding = flutterPluginBinding
         CrashHandler.init(context)
         methodChannel = MethodChannel(flutterPluginBinding.binaryMessenger, CHANNEL_METHOD)
         methodChannel.setMethodCallHandler(this)
@@ -618,20 +625,21 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         } catch (_: Throwable) {}
     }
 
-    private fun startCameraStream(): Boolean {
-        if (cameraRunning) return true
+    private fun startCameraStream(): Long {
+        // 返回 texture ID（-1 表示失败）
+        if (cameraRunning && textureEntry != null) return textureEntry!!.id()
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED) {
             CrashHandler.appendRuntime("Camera", "startCameraStream: no CAMERA permission")
             Log.w(TAG, "No camera permission")
-            return false
+            return -1L
         }
 
         val cm = context.getSystemService(Context.CAMERA_SERVICE) as? android.hardware.camera2.CameraManager
         if (cm == null) {
             CrashHandler.appendRuntime("Camera", "startCameraStream: CameraManager null")
             Log.e(TAG, "CameraManager unavailable")
-            return false
+            return -1L
         }
         cameraManager = cm
 
@@ -651,18 +659,16 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         if (chosenId == null) {
             CrashHandler.appendRuntime("Camera", "startCameraStream: no camera available (no id)")
             Log.e(TAG, "No camera available")
-            return false
+            return -1L
         }
         cameraId = chosenId
-        CrashHandler.appendRuntime("Camera", "cameraId=$chosenId, nativeSize=${camNativeWidth}x$camNativeHeight")
 
-        // 获取该摄像头支持的输出尺寸（用于 ImageReader）
+        // 获取该摄像头支持的输出尺寸
         val chars = cm.getCameraCharacteristics(chosenId)
         val configMap = chars.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         if (configMap != null) {
             val sizes = configMap.getOutputSizes(android.graphics.ImageFormat.YUV_420_888)
             if (sizes != null && sizes.isNotEmpty()) {
-                // 选择最接近 320x180 的尺寸，既节省性能又能有足够信息量
                 val target = 320 * 180
                 var bestSize = sizes[0]
                 var bestDiff = Long.MAX_VALUE
@@ -678,14 +684,29 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 camNativeHeight = bestSize.height
             }
         }
-        Log.i(TAG, "Camera output size: ${camNativeWidth}x$camNativeHeight")
+        CrashHandler.appendRuntime("Camera", "cameraId=$chosenId, nativeSize=${camNativeWidth}x$camNativeHeight")
+
+        // 创建 SurfaceTextureEntry（供 Flutter Texture 组件直接显示）
+        try {
+            val entry = flutterBinding.textureRegistry.createSurfaceTexture()
+            val st = entry.surfaceTexture()
+            st.setDefaultBufferSize(camNativeWidth, camNativeHeight)
+            textureEntry = entry
+            surfaceTexture = st
+            previewSurface = android.view.Surface(st)
+            CrashHandler.appendRuntime("Camera", "SurfaceTextureEntry created, textureId=${entry.id()}")
+        } catch (t: Throwable) {
+            Log.e(TAG, "Failed to create SurfaceTexture", t)
+            CrashHandler.appendRuntime("Camera", "SurfaceTexture create failed: ${t.message}")
+            return -1L
+        }
 
         // 启动后台线程
         val thread = HandlerThread("findmos-camera").apply { start() }
         cameraThread = thread
         cameraHandler = Handler(thread.looper)
 
-        // 创建 ImageReader，读取 YUV420_888
+        // 创建 ImageReader（仅用于运动检测）
         val reader = android.media.ImageReader.newInstance(
             camNativeWidth,
             camNativeHeight,
@@ -694,7 +715,6 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         )
         imageReader = reader
         reader.setOnImageAvailableListener(CameraFrameListener(), cameraHandler)
-        CrashHandler.appendRuntime("Camera", "ImageReader created, opening camera...")
 
         // 打开相机
         try {
@@ -706,10 +726,10 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         } catch (t: Throwable) {
             Log.e(TAG, "openCamera failed", t)
             cameraRunning = false
-            return false
+            return -1L
         }
         cameraRunning = true
-        return true
+        return textureEntry?.id() ?: -1L
     }
 
     private fun stopCameraStream() {
@@ -723,6 +743,12 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         cameraDevice = null
         try { imageReader?.close() } catch (_: Throwable) {}
         imageReader = null
+        try { previewSurface?.release() } catch (_: Throwable) {}
+        previewSurface = null
+        try { surfaceTexture?.release() } catch (_: Throwable) {}
+        surfaceTexture = null
+        try { textureEntry?.release() } catch (_: Throwable) {}
+        textureEntry = null
         try { cameraThread?.quitSafely() } catch (_: Throwable) {}
         cameraThread = null
         cameraHandler = null
@@ -732,31 +758,41 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         override fun onOpened(camera: android.hardware.camera2.CameraDevice) {
             CrashHandler.appendRuntime("Camera", "CameraDevice.onOpened")
             cameraDevice = camera
-            val reader = imageReader ?: return
-            val surface = reader.surface
+            val reader = imageReader
+            val ps = previewSurface
+            if (reader == null || ps == null) return
             try {
+                // 同时输出到 SurfaceTexture（显示） 和 ImageReader（运动检测）
+                val surfaces = mutableListOf<android.view.Surface>()
+                surfaces.add(ps)
+                surfaces.add(reader.surface)
                 camera.createCaptureSession(
-                    listOf(surface),
+                    surfaces,
                     object : android.hardware.camera2.CameraCaptureSession.StateCallback() {
                         override fun onConfigured(session: android.hardware.camera2.CameraCaptureSession) {
                             captureSession = session
-                            val requestBuilder = camera.createCaptureRequest(
-                                android.hardware.camera2.CameraDevice.TEMPLATE_PREVIEW,
-                            )
-                            requestBuilder.addTarget(surface)
-                            // 自动曝光
                             try {
-                                requestBuilder.set(
-                                    android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE,
-                                    android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE_ON,
+                                val requestBuilder = camera.createCaptureRequest(
+                                    android.hardware.camera2.CameraDevice.TEMPLATE_PREVIEW,
                                 )
-                            } catch (_: Throwable) {}
-                            try {
-                                session.setRepeatingRequest(requestBuilder.build(), null, cameraHandler)
-                                CrashHandler.appendRuntime("Camera", "setRepeatingRequest OK, camera stream running")
+                                requestBuilder.addTarget(ps)
+                                requestBuilder.addTarget(reader.surface)
+                                try {
+                                    requestBuilder.set(
+                                        android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE,
+                                        android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE_ON,
+                                    )
+                                } catch (_: Throwable) {}
+                                try {
+                                    session.setRepeatingRequest(requestBuilder.build(), null, cameraHandler)
+                                    CrashHandler.appendRuntime("Camera", "setRepeatingRequest OK, camera stream running (2 surfaces)")
+                                } catch (t: Throwable) {
+                                    CrashHandler.appendRuntime("Camera", "setRepeatingRequest failed: ${t.message}")
+                                    Log.e(TAG, "setRepeatingRequest failed", t)
+                                }
                             } catch (t: Throwable) {
-                                CrashHandler.appendRuntime("Camera", "setRepeatingRequest failed: ${t.message}")
-                                Log.e(TAG, "setRepeatingRequest failed", t)
+                                Log.e(TAG, "createCaptureRequest failed", t)
+                                CrashHandler.appendRuntime("Camera", "createCaptureRequest failed: ${t.message}")
                             }
                         }
 
@@ -769,6 +805,7 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 )
             } catch (t: Throwable) {
                 Log.e(TAG, "createCaptureSession failed", t)
+                CrashHandler.appendRuntime("Camera", "createCaptureSession failed: ${t.message}")
             }
         }
 
@@ -788,6 +825,9 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
     private inner class CameraFrameListener : android.media.ImageReader.OnImageAvailableListener {
         private var frameCount = 0
+        private var prevLuma: ByteArray? = null
+        private var lastEventTime = 0L
+
         override fun onImageAvailable(reader: android.media.ImageReader) {
             if (!cameraRunning) return
             val image = try { reader.acquireLatestImage() } catch (t: Throwable) {
@@ -800,7 +840,8 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 frameCount++
                 if (frameCount == 1) CrashHandler.appendRuntime("Camera", "First frame received!")
                 if (frameCount == 30) CrashHandler.appendRuntime("Camera", "30 frames received, stream is healthy")
-                // Y 平面（YUV_420_888 的第一个平面）
+
+                // Y 平面
                 val yPlane = image.planes[0]
                 val buffer = yPlane.buffer
                 val yRowStride = yPlane.rowStride
@@ -808,31 +849,72 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 val srcW = image.width
                 val srcH = image.height
 
-                // 缩放到 CAM_WIDTH x CAM_HEIGHT（等间隔采样）
-                val luma = IntArray(CAM_WIDTH * CAM_HEIGHT)
-                for (dy in 0 until CAM_HEIGHT) {
-                    val sy = (dy * srcH / CAM_HEIGHT).coerceIn(0, srcH - 1)
-                    for (dx in 0 until CAM_WIDTH) {
-                        val sx = (dx * srcW / CAM_WIDTH).coerceIn(0, srcW - 1)
+                // 下采样到 MOTION_WIDTH x MOTION_HEIGHT 用于轻量级运动检测
+                val subW = 40
+                val subH = 22
+                val curr = ByteArray(subW * subH)
+                for (dy in 0 until subH) {
+                    val sy = (dy * srcH / subH).coerceIn(0, srcH - 1)
+                    for (dx in 0 until subW) {
+                        val sx = (dx * srcW / subW).coerceIn(0, srcW - 1)
                         val byteIdx = sy * yRowStride + sx * yPixelStride
-                        val v = buffer.get(byteIdx).toInt() and 0xFF
-                        luma[dy * CAM_WIDTH + dx] = v
+                        curr[dy * subW + dx] = buffer.get(byteIdx)
                     }
                 }
 
-                val sink = cameraSink
-                if (sink != null) {
-                    try {
-                        sink.success(
-                            mapOf(
-                                "width" to CAM_WIDTH,
-                                "height" to CAM_HEIGHT,
-                                "luma" to luma,
-                                "format" to "YUV420_Y",
-                            ),
-                        )
-                    } catch (t: Throwable) {
-                        Log.w(TAG, "cameraSink send failed", t)
+                // 简单运动检测（与前帧差的绝对值和）
+                val prev = prevLuma
+                var motionPixelCount = 0
+                var minX = subW
+                var minY = subH
+                var maxX = -1
+                var maxY = -1
+                if (prev != null && prev.size == curr.size) {
+                    val threshold = 25
+                    for (i in curr.indices) {
+                        val diff = kotlin.math.abs((curr[i].toInt() and 0xFF) - (prev[i].toInt() and 0xFF))
+                        if (diff > threshold) {
+                            motionPixelCount++
+                            val x = i % subW
+                            val y = i / subW
+                            if (x < minX) minX = x
+                            if (y < minY) minY = y
+                            if (x > maxX) maxX = x
+                            if (y > maxY) maxY = y
+                        }
+                    }
+                }
+                prevLuma = curr
+
+                // 节流：最多每 200ms 向 Dart 发送一次运动事件
+                val now = System.currentTimeMillis()
+                if (now - lastEventTime > 200L) {
+                    lastEventTime = now
+                    val sink = cameraSink
+                    if (sink != null) {
+                        try {
+                            val map = mutableMapOf<String, Any?>(
+                                "frameCount" to frameCount,
+                                "subW" to subW,
+                                "subH" to subH,
+                                "motionPixels" to motionPixelCount,
+                            )
+                            if (motionPixelCount > 20 && maxX >= 0) {
+                                map["rects"] = listOf(
+                                    mapOf(
+                                        "left" to minX.toDouble() / subW,
+                                        "top" to minY.toDouble() / subH,
+                                        "right" to (maxX + 1).toDouble() / subW,
+                                        "bottom" to (maxY + 1).toDouble() / subH,
+                                    )
+                                )
+                            } else {
+                                map["rects"] = emptyList<Map<String, Double>>()
+                            }
+                            sink.success(map)
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "cameraSink send failed", t)
+                        }
                     }
                 }
             } catch (t: Throwable) {
