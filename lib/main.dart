@@ -604,7 +604,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
           children: [
             Positioned.fill(
               child: _cameraTextureId != null
-                  ? Texture(textureId: _cameraTextureId!, fit: BoxFit.fill)
+                  ? FittedBox(fit: BoxFit.fill, child: SizedBox(width: 1, height: 1, child: Texture(textureId: _cameraTextureId!)))
                   : Container(
                       color: Colors.black,
                       child: const Center(
