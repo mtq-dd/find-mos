@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -169,11 +167,8 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   bool _cameraOn = false;
   bool _torchOn = false;
 
-  MotionDetector? _motion;
   List<MotionRect> _rects = const <MotionRect>[];
-  int _frameW = 160;
-  int _frameH = 90;
-  ui.Image? _cameraImage; // 预渲染的灰度图像
+  int? _cameraTextureId; // Flutter Texture ID
   int _cameraFrameCount = 0;
   int _radarFrameCount = 0;
 
@@ -245,12 +240,13 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   Future<void> _startCamera() async {
     if (_cameraOn) return;
     try {
-      final ok = await _methodChannel.invokeMethod<bool>('startCameraStream') ?? false;
-      if (!ok) {
+      final textureId = await _methodChannel.invokeMethod<int>('startCameraStream') ?? -1;
+      if (textureId < 0) {
         setState(() => _status = '相机启动失败');
         return;
       }
       _cameraOn = true;
+      _cameraTextureId = textureId;
       _cameraSub = _cameraChannel.receiveBroadcastStream().listen(_onCameraEvent);
       setState(() {});
     } on PlatformException catch (e) {
@@ -261,6 +257,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   Future<void> _stopCamera() async {
     if (!_cameraOn) return;
     _cameraOn = false;
+    _cameraTextureId = null;
     await _cameraSub?.cancel();
     _cameraSub = null;
     try {
@@ -270,7 +267,6 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     }
     if (mounted) {
       setState(() {
-        _cameraImage = null;
         _rects = const <MotionRect>[];
       });
     }
@@ -297,42 +293,23 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
 
   void _onCameraEvent(dynamic event) async {
     final map = event as Map<dynamic, dynamic>;
-    final w = (map['width'] as int?) ?? 160;
-    final h = (map['height'] as int?) ?? 90;
-    final luma = (map['luma'] as List<dynamic>?)?.cast<int>() ?? const <int>[];
-    if (_motion == null || _motion!.width != w || _motion!.height != h) {
-      _motion = MotionDetector(width: w, height: h, threshold: 20, minArea: 3, maxArea: 1000);
-      _frameW = w;
-      _frameH = h;
-    }
-    // 运动检测
-    final rects = _motion!.detect(luma);
+    final frameCount = (map['frameCount'] as int?) ?? 0;
+    final motionPixels = (map['motionPixels'] as int?) ?? 0;
+    final rawRects = (map['rects'] as List<dynamic>?) ?? const <dynamic>[];
 
-    // 构建 RGBA 图像（用于 RawImage 渲染，大幅提升性能）
-    final pixels = Uint8List(w * h * 4);
-    for (var i = 0; i < luma.length && i < w * h; i++) {
-      final v = luma[i] & 0xFF;
-      final p = i * 4;
-      pixels[p] = v;           // R
-      pixels[p + 1] = v;       // G
-      pixels[p + 2] = v;       // B
-      pixels[p + 3] = 255;     // A
-    }
-
-    final imageCompleter = Completer<ui.Image>();
-    ui.decodeImageFromPixels(
-      pixels,
-      w,
-      h,
-      ui.PixelFormat.rgba8888,
-      (img) => imageCompleter.complete(img),
-    );
-    final img = await imageCompleter.future;
+    final rects = rawRects.map((r) {
+      final m = r as Map<dynamic, dynamic>;
+      return MotionRect(
+        left: ((m['left'] as num?)?.toDouble() ?? 0) * 100,
+        top: ((m['top'] as num?)?.toDouble() ?? 0) * 100,
+        right: ((m['right'] as num?)?.toDouble() ?? 0) * 100,
+        bottom: ((m['bottom'] as num?)?.toDouble() ?? 0) * 100,
+      );
+    }).toList();
 
     if (mounted) {
       setState(() {
-        _cameraImage = img;
-        _cameraFrameCount++;
+        _cameraFrameCount = frameCount;
         _rects = rects;
         if (_rects.isNotEmpty && _status != '目标接近') _status = '检测到运动';
       });
@@ -603,7 +580,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
           ),
           const SizedBox(height: 8),
           Text(
-            '运动: ${_rects.length}   帧: ${_frameW}×${_frameH}   图像帧数: $_cameraFrameCount',
+            '运动: ${_rects.length}   相机帧: $_cameraFrameCount',
             style: const TextStyle(color: Colors.white70, fontSize: 12),
           ),
         ],
@@ -614,15 +591,13 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   Widget _buildMotionOverlay() {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final w = constraints.maxWidth;
-        final h = constraints.maxHeight;
-        final scaleX = w / _frameW;
-        final scaleY = h / _frameH;
+        final scaleX = constraints.maxWidth / 100;
+        final scaleY = constraints.maxHeight / 100;
         return Stack(
           children: [
             Positioned.fill(
-              child: _cameraImage != null
-                  ? RawImage(image: _cameraImage, fit: BoxFit.fill)
+              child: _cameraTextureId != null
+                  ? Texture(textureId: _cameraTextureId!, fit: BoxFit.fill)
                   : Container(
                       color: Colors.black,
                       child: const Center(
@@ -645,7 +620,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
                 ),
               );
             }),
-            if (_rects.isEmpty && _cameraImage != null)
+            if (_rects.isEmpty && _cameraTextureId != null)
               const Positioned.fill(
                 child: Center(
                   child: Text('未检测到运动', style: TextStyle(color: Colors.white30)),

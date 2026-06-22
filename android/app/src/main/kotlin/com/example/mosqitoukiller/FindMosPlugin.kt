@@ -168,8 +168,8 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 result.success(true)
             }
             "startCameraStream" -> {
-                val ok = startCameraStream()
-                result.success(ok)
+                val textureId = startCameraStream()
+                result.success(textureId)
             }
             "stopCameraStream" -> {
                 stopCameraStream()
