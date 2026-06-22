@@ -496,28 +496,40 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
     private fun setTorch(on: Boolean) {
         try {
+            // 优先使用 startCameraStream 已打开的 cameraId，避免因 cameraId 与 torchCameraId
+            // 不一致导致 session 激活时 setTorchMode 无效的问题
+            val id = cameraId
+            if (id != null) {
+                val cm = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+                if (cm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    cm.setTorchMode(id, on)
+                    CrashHandler.appendRuntime("Torch", "setTorch($id, $on) ok")
+                    return
+                }
+            }
+            // fallback：重新查找后置摄像头（理论上不会走到这里）
             val cm = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager ?: return
             if (torchCameraId == null) {
-                for (id in cm.cameraIdList) {
-                    val chars = cm.getCameraCharacteristics(id)
+                for (cid in cm.cameraIdList) {
+                    val chars = cm.getCameraCharacteristics(cid)
                     val facing = chars.get(CameraCharacteristics.LENS_FACING) ?: continue
                     if (facing == CameraCharacteristics.LENS_FACING_BACK) {
-                        torchCameraId = id
+                        torchCameraId = cid
                         break
                     }
                 }
-                if (torchCameraId == null && cm.cameraIdList.isNotEmpty()) {
-                    torchCameraId = cm.cameraIdList[0]
-                }
             }
-            val id = torchCameraId ?: return
+            val tid = torchCameraId ?: cm.cameraIdList.firstOrNull() ?: return
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                cm.setTorchMode(id, on)
+                cm.setTorchMode(tid, on)
+                CrashHandler.appendRuntime("Torch", "setTorch fallback($tid, $on) ok")
             }
         } catch (t: CameraAccessException) {
             Log.w(TAG, "torch access exception", t)
+            CrashHandler.appendRuntime("Torch", "setTorch error: $t")
         } catch (t: Throwable) {
             Log.w(TAG, "torch failed", t)
+            CrashHandler.appendRuntime("Torch", "setTorch error: $t")
         }
     }
 
