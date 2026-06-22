@@ -7,6 +7,14 @@ import 'package:permission_handler/permission_handler.dart';
 import 'motion.dart';
 import 'radar.dart';
 
+// 飞行轨迹点：时间戳 + 归一化坐标(0-100)
+class _FlightPoint {
+  final int timeMs;
+  final double x; // 0-100
+  final double y; // 0-100
+  _FlightPoint(this.timeMs, this.x, this.y);
+}
+
 void main() {
   runApp(const FindMosApp());
 }
@@ -168,6 +176,9 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   bool _torchOn = false;
 
   List<MotionRect> _rects = const <MotionRect>[];
+  // 飞行轨迹队列：保留最近60帧位置（timeMs, centerX, centerY）
+  final List<_FlightPoint> _flightPath = [];
+  static const int _maxFlightPathLength = 60;
   int? _cameraTextureId; // Flutter Texture ID
   int _cameraFrameCount = 0;
   int _sensorOrientation = 0; // 摄像头传感器方向（度），0/90/180/270
@@ -322,6 +333,17 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
         _cameraFrameCount = frameCount;
         if (sensorOri != 0) _sensorOrientation = sensorOri;
         _rects = rects;
+        // 更新飞行轨迹队列：有运动时记录中心点
+        final nowMs = DateTime.now().millisecondsSinceEpoch;
+        for (final r in rects) {
+          final cx = (r.left + r.right) / 2.0;
+          final cy = (r.top + r.bottom) / 2.0;
+          _flightPath.add(_FlightPoint(nowMs, cx, cy));
+        }
+        // 限制轨迹长度
+        while (_flightPath.length > _maxFlightPathLength) {
+          _flightPath.removeAt(0);
+        }
         if (_rects.isNotEmpty && _status != '目标接近') _status = '检测到运动';
       });
     }
@@ -602,18 +624,16 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
         final scaleX = constraints.maxWidth / 100;
         final scaleY = constraints.maxHeight / 100;
         // sensorOrientation 通常为 90（后置摄像头），需要逆时针转 90 度才能在横屏 UI 中显示正常
+        // 旋转作用于整个 Stack，使轨迹层、运动框层与相机预览在同一旋转坐标系下对齐
         final needRotate = _sensorOrientation != 0;
         final radians = needRotate ? -_sensorOrientation * 3.141592653589793 / 180.0 : 0.0;
-        return Stack(
+        final overlay = Stack(
           children: [
             Positioned.fill(
               child: _cameraTextureId != null
-                  ? Transform.rotate(
-                      angle: radians,
-                      child: FittedBox(
-                        fit: BoxFit.contain,
-                        child: SizedBox(width: 1, height: 1, child: Texture(textureId: _cameraTextureId!)),
-                      ),
+                  ? FittedBox(
+                      fit: BoxFit.contain,
+                      child: SizedBox(width: 1, height: 1, child: Texture(textureId: _cameraTextureId!)),
                     )
                   : Container(
                       color: Colors.black,
@@ -623,6 +643,8 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
                     ),
             ),
             Positioned.fill(child: CustomPaint(painter: _ScanlinesPainter())),
+            // 飞行轨迹渲染层
+            Positioned.fill(child: CustomPaint(painter: _FlightPathPainter(_flightPath))),
             ..._rects.map((r) {
               return Positioned(
                 left: r.left * scaleX,
@@ -645,6 +667,10 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
               ),
           ],
         );
+        if (needRotate) {
+          return Transform.rotate(angle: radians, child: overlay);
+        }
+        return overlay;
       },
     );
   }
@@ -825,4 +851,39 @@ class _ScanlinesPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// 飞行轨迹渐变渲染：最新=亮绿#00FF88，最老=暗绿#003300
+class _FlightPathPainter extends CustomPainter {
+  final List<_FlightPoint> path;
+  _FlightPathPainter(this.path);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final len = path.length;
+    if (len < 2) return;
+    final scaleX = size.width / 100;
+    final scaleY = size.height / 100;
+    for (int i = 1; i < len; i++) {
+      final prev = path[i - 1];
+      final curr = path[i];
+      // 透明度：最新段=1.0，最老段=0.15
+      final t = i / len;
+      final alpha = 0.15 + 0.85 * t;
+      // 绿色分量：最老=0x33，最新=0xFF（纯绿无蓝色调）
+      final g = (0x33 + (0xFF - 0x33) * t).round().clamp(0, 255);
+      final paint = Paint()
+        ..color = Color.fromARGB((alpha * 255).round(), 0, g, 0)
+        ..strokeWidth = 2.0
+        ..style = PaintingStyle.stroke;
+      canvas.drawLine(
+        Offset(prev.x * scaleX, prev.y * scaleY),
+        Offset(curr.x * scaleX, curr.y * scaleY),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _FlightPathPainter oldDelegate) => true;
 }

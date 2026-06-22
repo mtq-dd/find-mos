@@ -830,7 +830,6 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     private inner class CameraFrameListener : android.media.ImageReader.OnImageAvailableListener {
         private var frameCount = 0
         private var prevLuma: ByteArray? = null
-        private var lastEventTime = 0L
 
         override fun onImageAvailable(reader: android.media.ImageReader) {
             if (!cameraRunning) return
@@ -890,36 +889,32 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 }
                 prevLuma = curr
 
-                // 节流：最多每 100ms 向 Dart 发送一次运动事件
-                val now = System.currentTimeMillis()
-                if (now - lastEventTime > 100L) {
-                    lastEventTime = now
-                    val sink = cameraSink
-                    if (sink != null) {
-                        try {
-                            val map = mutableMapOf<String, Any?>(
-                                "frameCount" to frameCount,
-                                "sensorOrientation" to sensorOrientation,
-                                "subW" to subW,
-                                "subH" to subH,
-                                "motionPixels" to motionPixelCount,
-                            )
-                            if (motionPixelCount > 5 && maxX >= 0) {
-                                map["rects"] = listOf(
-                                    mapOf(
-                                        "left" to minX.toDouble() / subW,
-                                        "top" to minY.toDouble() / subH,
-                                        "right" to (maxX + 1).toDouble() / subW,
-                                        "bottom" to (maxY + 1).toDouble() / subH,
-                                    )
+                // 每帧必发运动事件，不做节流限制，确保跟踪延时为0
+                val sink = cameraSink
+                if (sink != null) {
+                    try {
+                        val map = mutableMapOf<String, Any?>(
+                            "frameCount" to frameCount,
+                            "sensorOrientation" to sensorOrientation,
+                            "subW" to subW,
+                            "subH" to subH,
+                            "motionPixels" to motionPixelCount,
+                        )
+                        if (motionPixelCount > 5 && maxX >= 0) {
+                            map["rects"] = listOf(
+                                mapOf(
+                                    "left" to minX.toDouble() / subW,
+                                    "top" to minY.toDouble() / subH,
+                                    "right" to (maxX + 1).toDouble() / subW,
+                                    "bottom" to (maxY + 1).toDouble() / subH,
                                 )
-                            } else {
-                                map["rects"] = emptyList<Map<String, Double>>()
-                            }
-                            sink.success(map)
-                        } catch (t: Throwable) {
-                            Log.w(TAG, "cameraSink send failed", t)
+                            )
+                        } else {
+                            map["rects"] = emptyList<Map<String, Double>>()
                         }
+                        sink.success(map)
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "cameraSink send failed", t)
                     }
                 }
             } catch (t: Throwable) {
