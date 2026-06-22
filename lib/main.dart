@@ -175,6 +175,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
 
   bool _pulse = false;
   Timer? _pulseTimer;
+  bool _controlPanelVisible = false;
 
   @override
   void initState() {
@@ -431,57 +432,83 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildStatusBar(),
-            Expanded(
-              child: Row(
-                children: [
-                  Expanded(flex: 5, child: _buildRadarPanel()),
-                  Expanded(flex: 5, child: _buildCameraPanel()),
-                ],
+      backgroundColor: Colors.transparent,
+      body: Stack(
+        children: [
+          // Layer 0: 全屏相机画面（点击背景切换控制面板）
+          GestureDetector(
+            onTap: () => setState(() => _controlPanelVisible = !_controlPanelVisible),
+            child: Container(color: Colors.black, child: _buildCameraPanel()),
+          ),
+
+          // Layer 3: 雷达 HUD（左上角浮动，30% 透明）
+          Positioned(
+            left: 12,
+            top: MediaQuery.of(context).padding.top + 8,
+            child: RadarView(
+              target: _target,
+              pulse: _pulse || _target.distance > 0.6,
+              directionText: _direction,
+              running: _radarOn,
+            ),
+          ),
+
+          // Layer 4: 底部状态栏（30% 透明）
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: _buildStatusBar(),
+          ),
+
+          // 控制面板（点击按钮区域不传递点击事件）
+          if (_controlPanelVisible)
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: () {}, // 吸收面板上的点击，防止穿透
+                child: Container(color: Colors.transparent),
               ),
             ),
-            _buildControls(),
-          ],
-        ),
+          if (_controlPanelVisible)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: _buildControlPanel(),
+            ),
+        ],
       ),
     );
   }
 
+  // 30% 透明底部状态栏
   Widget _buildStatusBar() {
-    final accent = _status == '目标接近'
-        ? Colors.redAccent
-        : _status == '检测到运动'
-            ? Colors.orangeAccent
-            : _status == '追踪中'
-                ? Colors.yellowAccent
-                : Colors.greenAccent;
+    final dotColor = _radarOn ? const Color(0xFF00FF88) : Colors.grey;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      height: 36,
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: accent.withOpacity(0.3))),
+        color: const Color(0x4D050A08), // 30% 透明
+        border: const Border(top: BorderSide(color: Color(0x3300FF88), width: 0.5)),
       ),
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(children: [
-        Icon(Icons.radar, color: accent),
+        Container(
+          width: 8, height: 8,
+          decoration: BoxDecoration(shape: BoxShape.circle, color: dotColor),
+        ),
         const SizedBox(width: 8),
         Text(
-          '声光猎蚊 · $_status',
-          style: TextStyle(color: accent, fontWeight: FontWeight.bold, letterSpacing: 2),
+          _radarOn ? 'RADAR ACTIVE' : 'RADAR OFF',
+          style: TextStyle(color: dotColor, fontSize: 11, letterSpacing: 1.5, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(width: 16),
+        Text(
+          'FPS $_cameraFrameCount',
+          style: const TextStyle(color: Colors.white38, fontSize: 11),
         ),
         const Spacer(),
-        _chipSmall(Icons.mic, '麦克风', _radarOn),
-        const SizedBox(width: 8),
-        _chipSmall(Icons.videocam, '视觉', _cameraOn),
-        const SizedBox(width: 8),
-        _chipSmall(Icons.flash_on, '补光', _torchOn),
-        const SizedBox(width: 8),
-        IconButton(
-          tooltip: '查看日志',
-          icon: const Icon(Icons.bug_report, color: Colors.white70, size: 20),
-          onPressed: _showLogs,
-        ),
+        if (_torchOn)
+          const Icon(Icons.flash_on, color: Color(0xFF00FF88), size: 16),
       ]),
     );
   }
@@ -566,36 +593,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   }
 
   Widget _buildCameraPanel() {
-    return Padding(
-      padding: const EdgeInsets.all(12.0),
-      child: Column(
-        children: [
-          const Text(
-            '视觉运动侦测',
-            style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Container(
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.greenAccent.withOpacity(0.4), width: 2),
-                  borderRadius: BorderRadius.circular(12),
-                  color: Colors.black,
-                ),
-                child: _buildMotionOverlay(),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '运动: ${_rects.length}   相机帧: $_cameraFrameCount',
-            style: const TextStyle(color: Colors.white70, fontSize: 12),
-          ),
-        ],
-      ),
-    );
+    return ClipRect(child: _buildMotionOverlay());
   }
 
   Widget _buildMotionOverlay() {
@@ -651,56 +649,142 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     );
   }
 
-  Widget _buildControls() {
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          _ctrlButton(
-            icon: Icons.flashlight_on,
-            label: '手电筒',
-            on: _torchOn,
-            onPressed: _toggleTorch,
-            color: Colors.yellowAccent,
-          ),
-          _ctrlButton(
-            icon: Icons.surround_sound,
-            label: '惊扰音',
-            on: false,
-            onPressed: _playStartle,
-            color: Colors.purpleAccent,
-          ),
-          _ctrlButton(
-            icon: Icons.radar,
-            label: _radarOn ? '雷达开' : '雷达关',
-            on: _radarOn,
-            onPressed: () async {
-              if (_radarOn) {
-                await _stopRadar();
-              } else {
-                await _startRadar();
-              }
-            },
-            color: Colors.greenAccent,
-          ),
-          _ctrlButton(
-            icon: Icons.videocam,
-            label: _cameraOn ? '视觉开' : '视觉关',
-            on: _cameraOn,
-            onPressed: () async {
-              if (_cameraOn) {
-                await _stopCamera();
-              } else {
-                await _startCamera();
-              }
-            },
-            color: Colors.cyanAccent,
-          ),
-        ],
+  // 控制面板 — 30% 透明背景，点击相机背景关闭
+  Widget _buildControlPanel() {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Color(0x4D050A08), // 30% 透明
+        border: Border(top: BorderSide(color: Color(0x3300FF88), width: 0.5)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 拖拽指示条
+            Container(
+              margin: const EdgeInsets.only(top: 10),
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
+              child: Column(children: [
+                // 四个主控制按钮横排
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _ctrlButton(
+                      icon: Icons.mic,
+                      label: '麦克风',
+                      on: _radarOn,
+                      onPressed: () async {
+                        if (_radarOn) { await _stopRadar(); } else { await _startRadar(); }
+                      },
+                      color: const Color(0xFF00FF88),
+                    ),
+                    _ctrlButton(
+                      icon: Icons.videocam,
+                      label: '视觉',
+                      on: _cameraOn,
+                      onPressed: () async {
+                        if (_cameraOn) { await _stopCamera(); } else { await _startCamera(); }
+                      },
+                      color: const Color(0xFF00BFFF),
+                    ),
+                    _ctrlButton(
+                      icon: Icons.flashlight_on,
+                      label: '补光',
+                      on: _torchOn,
+                      onPressed: _toggleTorch,
+                      color: const Color(0xFFFFB800),
+                    ),
+                    _ctrlButton(
+                      icon: Icons.surround_sound,
+                      label: '惊扰音',
+                      on: false,
+                      onPressed: _playStartle,
+                      color: const Color(0xFF9B59B6),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                // 分隔线
+                Container(height: 0.5, color: const Color(0x2200FF88)),
+                const SizedBox(height: 12),
+                // 雷达详细数据行
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _statItem('方位', _direction ?? '--'),
+                    _statItem('距离', _radarOn ? '${(_target.distance * 100).toStringAsFixed(0)}%' : '--'),
+                    _statItem('帧', '$_radarFrameCount'),
+                    _statItem('L', _radarOn ? '${(_leftEnergy * 100).toStringAsFixed(0)}' : '--',
+                        barColor: Colors.cyanAccent, barValue: _leftEnergy),
+                    _statItem('R', _radarOn ? '${(_rightEnergy * 100).toStringAsFixed(0)}' : '--',
+                        barColor: Colors.pinkAccent, barValue: _rightEnergy),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                // 底部日志按钮
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () { _showLogs(); },
+                    icon: const Icon(Icons.bug_report, color: Color(0xFF00FF88), size: 16),
+                    label: const Text('查看运行时日志', style: TextStyle(color: Color(0xFF00FF88))),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0x3300FF88)),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ]),
+            ),
+          ],
+        ),
       ),
     );
   }
+
+  Widget _statItem(String label, String value, {Color? barColor, double? barValue}) {
+    return Column(children: [
+      Text(label, style: const TextStyle(color: Colors.white38, fontSize: 10, letterSpacing: 1)),
+      const SizedBox(height: 2),
+      if (barColor != null && barValue != null)
+        SizedBox(
+          width: 40, height: 24,
+          child: Stack(alignment: Alignment.bottomCenter, children: [
+            Container(width: 40, height: 16, decoration: BoxDecoration(
+              color: Colors.white10, borderRadius: BorderRadius.circular(3),
+            )),
+            FractionallySizedBox(
+              heightFactor: barValue.clamp(0.0, 1.0),
+              child: Container(width: 40,
+                decoration: BoxDecoration(
+                  color: barColor,
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: 2,
+              child: Text(value, style: const TextStyle(color: Colors.white70, fontSize: 9, fontWeight: FontWeight.bold)),
+            ),
+          ]),
+        )
+      else
+        Text(value, style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
+    ]);
+  }
+
+  // 旧版控件（不再使用，保留以防万一）
+  Widget _buildControls() => const SizedBox.shrink();
 
   Widget _ctrlButton({
     required IconData icon,
