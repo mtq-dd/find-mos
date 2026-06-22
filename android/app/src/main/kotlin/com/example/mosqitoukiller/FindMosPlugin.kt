@@ -859,6 +859,8 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     private inner class CameraFrameListener : android.media.ImageReader.OnImageAvailableListener {
         private var frameCount = 0
         private var prevLuma: ByteArray? = null
+        private var prevMotion = false
+        private var throttleCounter = 0
 
         override fun onImageAvailable(reader: android.media.ImageReader) {
             if (!cameraRunning) return
@@ -922,35 +924,42 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 }
                 prevLuma = curr
 
-                // 每帧必发运动事件，不做节流限制
-                val sink = cameraSink
-                if (sink != null) {
-                    try {
-                        val map = mutableMapOf<String, Any?>(
-                            "frameCount" to frameCount,
-                            "sensorOrientation" to sensorOrientation,
-                            "subW" to subW,
-                            "subH" to subH,
-                            "motionPixels" to motionPixelCount,
-                        )
-                        if (motionPixelCount > 5 && maxX >= 0) {
-                            if (frameCount % 30 == 0) CrashHandler.appendRuntime("Motion", "detected! pixels=$motionPixelCount")
-                            map["rects"] = listOf(
-                                mapOf(
-                                    "left" to minX.toDouble() / subW,
-                                    "top" to minY.toDouble() / subH,
-                                    "right" to (maxX + 1).toDouble() / subW,
-                                    "bottom" to (maxY + 1).toDouble() / subH,
-                                )
+                // 节流：仅在状态变化或运动时周期发送
+                val hasMotion = motionPixelCount > 5 && maxX >= 0
+                val shouldSend = hasMotion != prevMotion || (hasMotion && throttleCounter % 6 == 0)
+                throttleCounter++
+
+                if (shouldSend) {
+                    val sink = cameraSink
+                    if (sink != null) {
+                        try {
+                            val map = mutableMapOf<String, Any?>(
+                                "frameCount" to frameCount,
+                                "sensorOrientation" to sensorOrientation,
+                                "subW" to subW,
+                                "subH" to subH,
+                                "motionPixels" to motionPixelCount,
                             )
-                        } else {
-                            map["rects"] = emptyList<Map<String, Double>>()
+                            if (hasMotion) {
+                                if (!prevMotion) CrashHandler.appendRuntime("Motion", "detected! pixels=$motionPixelCount")
+                                map["rects"] = listOf(
+                                    mapOf(
+                                        "left" to minX.toDouble() / subW,
+                                        "top" to minY.toDouble() / subH,
+                                        "right" to (maxX + 1).toDouble() / subW,
+                                        "bottom" to (maxY + 1).toDouble() / subH,
+                                    )
+                                )
+                            } else {
+                                map["rects"] = emptyList<Map<String, Double>>()
+                            }
+                            sink.success(map)
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "cameraSink send failed", t)
                         }
-                        sink.success(map)
-                    } catch (t: Throwable) {
-                        Log.w(TAG, "cameraSink send failed", t)
                     }
                 }
+                prevMotion = hasMotion
             } catch (t: Throwable) {
                 Log.w(TAG, "process camera frame failed", t)
             } finally {
