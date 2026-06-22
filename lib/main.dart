@@ -299,11 +299,18 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
 
     final rects = rawRects.map((r) {
       final m = r as Map<dynamic, dynamic>;
+      final left = ((m['left'] as num?)?.toDouble() ?? 0) * 100;
+      final top = ((m['top'] as num?)?.toDouble() ?? 0) * 100;
+      final right = ((m['right'] as num?)?.toDouble() ?? 0) * 100;
+      final bottom = ((m['bottom'] as num?)?.toDouble() ?? 0) * 100;
+      final w = (right - left).round();
+      final h = (bottom - top).round();
       return MotionRect(
-        left: ((m['left'] as num?)?.toDouble() ?? 0) * 100,
-        top: ((m['top'] as num?)?.toDouble() ?? 0) * 100,
-        right: ((m['right'] as num?)?.toDouble() ?? 0) * 100,
-        bottom: ((m['bottom'] as num?)?.toDouble() ?? 0) * 100,
+        left: left.round(),
+        top: top.round(),
+        right: right.round(),
+        bottom: bottom.round(),
+        area: (w * h).clamp(1, 999999),
       );
     }).toList();
 
