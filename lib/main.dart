@@ -16,6 +16,53 @@ class _FlightPoint {
   _FlightPoint(this.timeMs, this.x, this.y);
 }
 
+// 带存活时间的运动检测槽位（环形缓冲区用）
+class _MotionSlot {
+  MotionRect rect;
+  int createdAtMs;
+  _MotionSlot(this.rect, this.createdAtMs);
+}
+
+// 环形缓冲区：零堆分配，O(1) 淘汰
+class _MotionRing {
+  static const int _capacity = 64;
+  final List<_MotionSlot?> _slots = List<_MotionSlot?>.filled(_capacity, null);
+  int _head = 0;
+  int _count = 0;
+
+  void add(MotionRect rect, int nowMs) {
+    final idx = (_head + _count) % _capacity;
+    if (_slots[idx] == null) {
+      _slots[idx] = _MotionSlot(rect, nowMs);
+    } else {
+      _slots[idx]!.rect = rect;
+      _slots[idx]!.createdAtMs = nowMs;
+    }
+    if (_count < _capacity) {
+      _count++;
+    } else {
+      _head = (_head + 1) % _capacity;
+    }
+  }
+
+  // 收集所有未过期的槽位，写入 out 列表（复用 out 避免分配）
+  void collectActive(int cutoffMs, List<_MotionSlot> out) {
+    out.clear();
+    for (int i = 0; i < _count; i++) {
+      final idx = (_head + i) % _capacity;
+      final slot = _slots[idx];
+      if (slot != null && slot.createdAtMs >= cutoffMs) {
+        out.add(slot);
+      }
+    }
+  }
+
+  void clear() {
+    _head = 0;
+    _count = 0;
+  }
+}
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
@@ -178,7 +225,11 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   bool _cameraOn = false;
   bool _torchOn = false;
 
-  List<MotionRect> _rects = const <MotionRect>[];
+  // 运动检测环形缓冲区
+  final _MotionRing _motionRing = _MotionRing();
+  // 渲染用临时列表（复用，避免每帧分配）
+  final List<_MotionSlot> _activeSlots = [];
+  static const int _motionKeepMs = 600; // 检测到后保留 600ms
   // 飞行轨迹队列：保留最近60帧位置（timeMs, centerX, centerY）
   final List<_FlightPoint> _flightPath = [];
   static const int _maxFlightPathLength = 60;
@@ -325,7 +376,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     }
     if (mounted) {
       setState(() {
-        _rects = const <MotionRect>[];
+        _motionRing.clear();
       });
     }
   }
@@ -340,7 +391,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     _methodChannel.invokeMethod<bool>('stopCameraStream'); // fire & forget
     _flightPath.clear();
     setState(() {
-      _rects = const <MotionRect>[];
+      _motionRing.clear();
     });
   }
 
@@ -355,7 +406,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     setState(() {
       _target = RadarTarget(distance: distance, azimuth: azimuth);
       _direction = direction;
-      _status = _rects.isNotEmpty ? '检测到运动' : status;
+      _status = _activeSlots.isNotEmpty ? '检测到运动' : status;
       _leftEnergy = lE;
       _rightEnergy = rE;
       _radarFrameCount++;
@@ -363,47 +414,51 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     });
   }
 
-  void _onCameraEvent(dynamic event) async {
+  void _onCameraEvent(dynamic event) {
     final map = event as Map<dynamic, dynamic>;
     final frameCount = (map['frameCount'] as int?) ?? 0;
     final sensorOri = (map['sensorOrientation'] as int?) ?? 0;
-    final motionPixels = (map['motionPixels'] as int?) ?? 0;
     final rawRects = (map['rects'] as List<dynamic>?) ?? const <dynamic>[];
 
-    final rects = rawRects.map<MotionRect>((r) {
-      final m = r as Map<dynamic, dynamic>;
+    MotionRect? parsed;
+    if (rawRects.isNotEmpty) {
+      final m = rawRects[0] as Map<dynamic, dynamic>;
       final left = ((m['left'] as num?)?.toDouble() ?? 0) * 100;
       final top = ((m['top'] as num?)?.toDouble() ?? 0) * 100;
       final right = ((m['right'] as num?)?.toDouble() ?? 0) * 100;
       final bottom = ((m['bottom'] as num?)?.toDouble() ?? 0) * 100;
       final w = (right - left).round();
       final h = (bottom - top).round();
-      return MotionRect(
+      parsed = MotionRect(
         left: left.round(),
         top: top.round(),
         right: right.round(),
         bottom: bottom.round(),
         area: (w * h).clamp(1, 999999),
       );
-    }).toList();
+    }
+
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
 
     if (mounted) {
       setState(() {
         _cameraFrameCount = frameCount;
         if (sensorOri != 0) _sensorOrientation = sensorOri;
-        _rects = rects;
-        // 更新飞行轨迹队列：有运动时记录中心点
-        final nowMs = DateTime.now().millisecondsSinceEpoch;
-        for (final r in rects) {
-          final cx = (r.left + r.right) / 2.0;
-          final cy = (r.top + r.bottom) / 2.0;
+        // 新检测追加到环形缓冲区
+        if (parsed != null) {
+          _motionRing.add(parsed, nowMs);
+          // 飞行轨迹：记录中心点
+          final cx = (parsed.left + parsed.right) / 2.0;
+          final cy = (parsed.top + parsed.bottom) / 2.0;
           _flightPath.add(_FlightPoint(nowMs, cx, cy));
+          while (_flightPath.length > _maxFlightPathLength) {
+            _flightPath.removeAt(0);
+          }
         }
-        // 限制轨迹长度
-        while (_flightPath.length > _maxFlightPathLength) {
-          _flightPath.removeAt(0);
-        }
-        if (_rects.isNotEmpty && _status != '目标接近') _status = '检测到运动';
+        // 从环形缓冲区收集存活 rect（复用 _activeSlots 避免分配）
+        final cutoff = nowMs - _motionKeepMs;
+        _motionRing.collectActive(cutoff, _activeSlots);
+        if (_activeSlots.isNotEmpty && _status != '目标接近') _status = '检测到运动';
       });
     }
   }
@@ -704,21 +759,24 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
             Positioned.fill(child: CustomPaint(painter: _ScanlinesPainter())),
             // 飞行轨迹渲染层
             Positioned.fill(child: CustomPaint(painter: _FlightPathPainter(_flightPath))),
-            ..._rects.map((r) {
+            // 运动检测框渲染层（从环形缓冲区，按存活时间计算透明度）
+            ..._activeSlots.map((slot) {
+              final ageMs = DateTime.now().millisecondsSinceEpoch - slot.createdAtMs;
+              final opacity = (1.0 - (ageMs / _motionKeepMs)).clamp(0.1, 1.0);
               return Positioned(
-                left: r.left * scaleX,
-                top: r.top * scaleY,
-                width: (r.right - r.left + 1) * scaleX,
-                height: (r.bottom - r.top + 1) * scaleY,
+                left: slot.rect.left * scaleX,
+                top: slot.rect.top * scaleY,
+                width: (slot.rect.right - slot.rect.left + 1) * scaleX,
+                height: (slot.rect.bottom - slot.rect.top + 1) * scaleY,
                 child: Container(
                   decoration: BoxDecoration(
-                    border: Border.all(color: Colors.redAccent, width: 2),
-                    color: Colors.redAccent.withOpacity(0.2),
+                    border: Border.all(color: Colors.redAccent.withOpacity(opacity), width: 2),
+                    color: Colors.redAccent.withOpacity(0.15 * opacity),
                   ),
                 ),
               );
             }),
-            if (_rects.isEmpty && _cameraTextureId != null)
+            if (_activeSlots.isEmpty && _cameraTextureId != null)
               const Positioned.fill(
                 child: Center(
                   child: Text('未检测到运动', style: TextStyle(color: Colors.white30)),
