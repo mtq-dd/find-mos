@@ -56,8 +56,8 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     private lateinit var radarEventChannel: EventChannel
     private lateinit var cameraEventChannel: EventChannel
 
-    private var radarSink: EventChannel.EventSink? = null
-    private var cameraSink: EventChannel.EventSink? = null
+    @Volatile private var radarSink: EventChannel.EventSink? = null
+    @Volatile private var cameraSink: EventChannel.EventSink? = null
 
     private var audioThread: HandlerThread? = null
     private var audioHandler: Handler? = null
@@ -934,6 +934,7 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                             "motionPixels" to motionPixelCount,
                         )
                         if (motionPixelCount > 5 && maxX >= 0) {
+                            if (frameCount % 30 == 0) CrashHandler.appendRuntime("Motion", "detected! pixels=$motionPixelCount")
                             map["rects"] = listOf(
                                 mapOf(
                                     "left" to minX.toDouble() / subW,
