@@ -368,6 +368,79 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _showLogs() async {
+    String? runtime;
+    String? crash;
+    List<dynamic> list = const <dynamic>[];
+    try {
+      runtime = await _methodChannel.invokeMethod<String>('getLatestRuntimeLog');
+    } on PlatformException catch (e) { debugPrint('getLatestRuntimeLog error: $e'); }
+    try {
+      crash = await _methodChannel.invokeMethod<String>('getLatestCrashLog');
+    } on PlatformException catch (e) { debugPrint('getLatestCrashLog error: $e'); }
+    try {
+      final r = await _methodChannel.invokeMethod<List<dynamic>>('listRuntimeLogs');
+      if (r != null) list = r;
+    } on PlatformException catch (e) { debugPrint('listRuntimeLogs error: $e'); }
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0E1B16),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) {
+        return DraggableScrollableSheet(
+          expand: false, initialChildSize: 0.7, minChildSize: 0.3, maxChildSize: 0.95,
+          builder: (ctx, scroll) {
+            return ListView(controller: scroll, padding: const EdgeInsets.all(16), children: [
+              Row(children: [
+                const Icon(Icons.bug_report, color: Colors.greenAccent),
+                const SizedBox(width: 8),
+                const Text('日志', style: TextStyle(color: Colors.white, fontSize: 16)),
+              ]),
+              const SizedBox(height: 12),
+              _logSection('崩溃日志', crash, Colors.redAccent),
+              const SizedBox(height: 12),
+              _logSection('运行时日志', runtime, Colors.greenAccent),
+              const SizedBox(height: 12),
+              const Text('日志文件：', style: TextStyle(color: Colors.white70)),
+              if (list.isEmpty)
+                const Padding(padding: EdgeInsets.symmetric(vertical: 8), child: Text('（暂无）', style: TextStyle(color: Colors.white38)))
+              else
+                ...list.map((e) {
+                  final m = (e as Map).cast<String, dynamic>();
+                  return Padding(padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Text('• ${m['name']}  (${(m['size'] / 1024).toStringAsFixed(1)} KB)',
+                        style: const TextStyle(color: Colors.white54, fontSize: 12)));
+                }),
+            ]);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _logSection(String title, String? content, Color color) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.06),
+        border: Border.all(color: color.withOpacity(0.4)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: TextStyle(color: color, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 6),
+        if (content == null || content.isEmpty)
+          const Text('（无）', style: TextStyle(color: Colors.white38, fontSize: 12))
+        else
+          SelectableText(
+            content.length > 6000 ? content.substring(content.length - 6000) : content,
+            style: const TextStyle(color: Colors.white70, fontSize: 11, fontFamily: 'monospace')),
+      ]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -416,6 +489,12 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
         _chipSmall(Icons.videocam, '视觉', _cameraOn),
         const SizedBox(width: 8),
         _chipSmall(Icons.flash_on, '补光', _torchOn),
+        const SizedBox(width: 8),
+        IconButton(
+          tooltip: '查看日志',
+          icon: const Icon(Icons.bug_report, color: Colors.white70, size: 20),
+          onPressed: _showLogs,
+        ),
       ]),
     );
   }

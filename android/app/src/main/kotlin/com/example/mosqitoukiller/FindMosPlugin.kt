@@ -193,6 +193,18 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 CrashHandler.recordHandledException(Exception(message), source)
                 result.success(true)
             }
+            "logEvent" -> {
+                val tag = call.argument<String>("tag") ?: "dart"
+                val message = call.argument<String>("message") ?: ""
+                CrashHandler.appendRuntime(tag, message)
+                result.success(true)
+            }
+            "getLatestRuntimeLog" -> {
+                result.success(CrashHandler.getLatestRuntimeLog())
+            }
+            "listRuntimeLogs" -> {
+                result.success(CrashHandler.listRuntimeLogs())
+            }
             else -> result.notImplemented()
         }
     }
@@ -610,12 +622,14 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         if (cameraRunning) return true
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED) {
+            CrashHandler.appendRuntime("Camera", "startCameraStream: no CAMERA permission")
             Log.w(TAG, "No camera permission")
             return false
         }
 
         val cm = context.getSystemService(Context.CAMERA_SERVICE) as? android.hardware.camera2.CameraManager
         if (cm == null) {
+            CrashHandler.appendRuntime("Camera", "startCameraStream: CameraManager null")
             Log.e(TAG, "CameraManager unavailable")
             return false
         }
@@ -635,10 +649,12 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             chosenId = cm.cameraIdList[0]
         }
         if (chosenId == null) {
+            CrashHandler.appendRuntime("Camera", "startCameraStream: no camera available (no id)")
             Log.e(TAG, "No camera available")
             return false
         }
         cameraId = chosenId
+        CrashHandler.appendRuntime("Camera", "cameraId=$chosenId, nativeSize=${camNativeWidth}x$camNativeHeight")
 
         // 获取该摄像头支持的输出尺寸（用于 ImageReader）
         val chars = cm.getCameraCharacteristics(chosenId)
@@ -678,6 +694,7 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         )
         imageReader = reader
         reader.setOnImageAvailableListener(CameraFrameListener(), cameraHandler)
+        CrashHandler.appendRuntime("Camera", "ImageReader created, opening camera...")
 
         // 打开相机
         try {
@@ -696,6 +713,7 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     }
 
     private fun stopCameraStream() {
+        CrashHandler.appendRuntime("Camera", "stopCameraStream called")
         cameraRunning = false
         cameraHandler?.removeCallbacksAndMessages(null)
         try { captureSession?.abortCaptures() } catch (_: Throwable) {}
@@ -712,6 +730,7 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
     private inner class CameraStateCallback : android.hardware.camera2.CameraDevice.StateCallback() {
         override fun onOpened(camera: android.hardware.camera2.CameraDevice) {
+            CrashHandler.appendRuntime("Camera", "CameraDevice.onOpened")
             cameraDevice = camera
             val reader = imageReader ?: return
             val surface = reader.surface
@@ -734,12 +753,15 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                             } catch (_: Throwable) {}
                             try {
                                 session.setRepeatingRequest(requestBuilder.build(), null, cameraHandler)
+                                CrashHandler.appendRuntime("Camera", "setRepeatingRequest OK, camera stream running")
                             } catch (t: Throwable) {
+                                CrashHandler.appendRuntime("Camera", "setRepeatingRequest failed: ${t.message}")
                                 Log.e(TAG, "setRepeatingRequest failed", t)
                             }
                         }
 
                         override fun onConfigureFailed(session: android.hardware.camera2.CameraCaptureSession) {
+                            CrashHandler.appendRuntime("Camera", "CaptureSession onConfigureFailed")
                             Log.e(TAG, "Camera capture session configure failed")
                         }
                     },
@@ -751,11 +773,13 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         }
 
         override fun onDisconnected(camera: android.hardware.camera2.CameraDevice) {
+            CrashHandler.appendRuntime("Camera", "CameraDevice onDisconnected")
             try { camera.close() } catch (_: Throwable) {}
             if (cameraDevice === camera) cameraDevice = null
         }
 
         override fun onError(camera: android.hardware.camera2.CameraDevice, error: Int) {
+            CrashHandler.appendRuntime("Camera", "CameraDevice onError code=$error")
             Log.e(TAG, "Camera error: $error")
             try { camera.close() } catch (_: Throwable) {}
             if (cameraDevice === camera) cameraDevice = null
@@ -763,6 +787,7 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     }
 
     private inner class CameraFrameListener : android.media.ImageReader.OnImageAvailableListener {
+        private var frameCount = 0
         override fun onImageAvailable(reader: android.media.ImageReader) {
             if (!cameraRunning) return
             val image = try { reader.acquireLatestImage() } catch (t: Throwable) {
@@ -772,6 +797,9 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             if (image == null) return
 
             try {
+                frameCount++
+                if (frameCount == 1) CrashHandler.appendRuntime("Camera", "First frame received!")
+                if (frameCount == 30) CrashHandler.appendRuntime("Camera", "30 frames received, stream is healthy")
                 // Y 平面（YUV_420_888 的第一个平面）
                 val yPlane = image.planes[0]
                 val buffer = yPlane.buffer

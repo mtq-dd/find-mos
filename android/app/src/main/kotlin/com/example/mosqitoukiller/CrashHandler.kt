@@ -16,6 +16,7 @@ object CrashHandler : Thread.UncaughtExceptionHandler {
 
     private const val TAG = "CrashHandler"
     private const val LOG_DIR = "mosqitoukiller_crashes"
+    private const val RUNTIME_LOG_DIR = "mosqitoukiller_runtime"
     private const val MAX_LOG_FILES = 5
     private const val MAX_LOG_AGE_DAYS = 7
 
@@ -92,6 +93,47 @@ object CrashHandler : Thread.UncaughtExceptionHandler {
             Log.i(TAG, "All crash logs cleared")
         } catch (e: Throwable) {
             Log.e(TAG, "Failed to clear crash logs", e)
+        }
+    }
+
+    fun appendRuntime(tag: String, message: String) {
+        try {
+            val dir = File(context.cacheDir, RUNTIME_LOG_DIR)
+            if (!dir.exists()) dir.mkdirs()
+            val dateStr = SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date())
+            val file = File(dir, "runtime_$dateStr.log")
+            val ts = SimpleDateFormat("HH:mm:ss.SSS", Locale.CHINA).format(Date())
+            file.appendText("[$ts][$tag] $message\n")
+        } catch (e: Throwable) {
+            Log.e(TAG, "appendRuntime failed", e)
+        }
+    }
+
+    fun getLatestRuntimeLog(): String? {
+        try {
+            val dir = File(context.cacheDir, RUNTIME_LOG_DIR)
+            if (!dir.exists()) return null
+            val files = dir.listFiles { _, name -> name.endsWith(".log") }
+                ?.sortedByDescending { it.lastModified() }
+            if (files.isNullOrEmpty()) return null
+            return files[0].readText()
+        } catch (e: Throwable) {
+            Log.e(TAG, "getLatestRuntimeLog failed", e)
+            return null
+        }
+    }
+
+    fun listRuntimeLogs(): List<Map<String, Any?>> {
+        return try {
+            val dir = File(context.cacheDir, RUNTIME_LOG_DIR)
+            if (!dir.exists()) return emptyList()
+            dir.listFiles { _, name -> name.endsWith(".log") }
+                ?.sortedByDescending { it.lastModified() }
+                ?.map { mapOf("name" to it.name, "path" to it.absolutePath, "size" to it.length(), "modified" to it.lastModified()) }
+                ?: emptyList()
+        } catch (e: Throwable) {
+            Log.e(TAG, "listRuntimeLogs failed", e)
+            emptyList()
         }
     }
 
