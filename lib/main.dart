@@ -623,20 +623,14 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
       builder: (context, constraints) {
         final scaleX = constraints.maxWidth / 100;
         final scaleY = constraints.maxHeight / 100;
-        // sensorOrientation 通常为 90（后置摄像头），需要逆时针转 90 度才能在横屏 UI 中显示正常
-        // 相机纹理单独旋转；overlay 坐标与屏幕坐标系一致，无需旋转
-        final needRotate = _sensorOrientation != 0;
-        final radians = needRotate ? -_sensorOrientation * 3.141592653589793 / 180.0 : 0.0;
+        // sensorOrientation=90 为原生横屏输出，Android相机已处理方向，无需 Dart 侧旋转
         return Stack(
           children: [
             Positioned.fill(
               child: _cameraTextureId != null
-                  ? Transform.rotate(
-                      angle: radians,
-                      child: FittedBox(
-                        fit: BoxFit.contain,
-                        child: SizedBox(width: 1, height: 1, child: Texture(textureId: _cameraTextureId!)),
-                      ),
+                  ? FittedBox(
+                      fit: BoxFit.cover,
+                      child: SizedBox(width: 1, height: 1, child: Texture(textureId: _cameraTextureId!)),
                     )
                   : Container(
                       color: Colors.black,
