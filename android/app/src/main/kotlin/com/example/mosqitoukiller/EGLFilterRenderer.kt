@@ -5,12 +5,14 @@
 package com.example.mosqitoukiller
 
 import android.graphics.SurfaceTexture
+import android.util.Log
 import android.opengl.EGL14
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
 import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES20
+import android.opengl.GLES11Ext
 import android.view.Surface
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -34,8 +36,9 @@ class EGLFilterRenderer {
 
         // 原色（直接显示）
         private const val FRAG_ORIGINAL = """
+            #extension GL_OES_EGL_image_external : require
             precision mediump float;
-            uniform sampler2D uTexture;
+            uniform samplerExternalOES uTexture;
             varying vec2 vTexCoord;
             void main() {
                 gl_FragColor = texture2D(uTexture, vTexCoord);
@@ -44,8 +47,9 @@ class EGLFilterRenderer {
 
         // 热成像 Ironbow 调色板
         private const val FRAG_THERMAL = """
+            #extension GL_OES_EGL_image_external : require
             precision mediump float;
-            uniform sampler2D uTexture;
+            uniform samplerExternalOES uTexture;
             varying vec2 vTexCoord;
             void main() {
                 vec4 color = texture2D(uTexture, vTexCoord);
@@ -68,8 +72,9 @@ class EGLFilterRenderer {
 
         // 边缘检测 Sobel 算子
         private const val FRAG_EDGE = """
+            #extension GL_OES_EGL_image_external : require
             precision mediump float;
-            uniform sampler2D uTexture;
+            uniform samplerExternalOES uTexture;
             uniform vec2 uResolution;
             varying vec2 vTexCoord;
             void main() {
@@ -92,8 +97,9 @@ class EGLFilterRenderer {
 
         // 反色
         private const val FRAG_INVERT = """
+            #extension GL_OES_EGL_image_external : require
             precision mediump float;
-            uniform sampler2D uTexture;
+            uniform samplerExternalOES uTexture;
             varying vec2 vTexCoord;
             void main() {
                 vec4 color = texture2D(uTexture, vTexCoord);
@@ -225,14 +231,16 @@ class EGLFilterRenderer {
         }
 
         // 7. 创建 OpenGL 纹理（用于输入 SurfaceTexture）
+        // 使用外部纹理 target，因为 SurfaceTexture 通常对外部 OES 纹理进行更新（相机等）
         val textures = IntArray(1)
         GLES20.glGenTextures(1, textures, 0)
         inputTextureId = textures[0]
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, inputTextureId)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        // 绑定到 GL_TEXTURE_EXTERNAL_OES
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, inputTextureId)
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
 
         // 8. 创建输入 SurfaceTexture
         inputSurfaceTexture = SurfaceTexture(inputTextureId)
@@ -306,11 +314,11 @@ class EGLFilterRenderer {
     fun onFrameAvailable() {
         if (!initialized) return
 
+        // 绑定 EGL 上下文 —— 必须先绑定，updateTexImage() 需要当前的 GL context
+        EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+
         // 更新输入纹理（相机帧 → OpenGL 纹理）
         inputSurfaceTexture?.updateTexImage()
-
-        // 绑定 EGL 上下文
-        EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
 
         // 设置视口
         GLES20.glViewport(0, 0, width, height)
@@ -330,7 +338,8 @@ class EGLFilterRenderer {
         // 纹理
         val uTex = GLES20.glGetUniformLocation(program, "uTexture")
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, inputTextureId)
+        // 使用外部纹理 target
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, inputTextureId)
         GLES20.glUniform1i(uTex, 0)
 
         // 分辨率（边缘检测用）
@@ -341,6 +350,10 @@ class EGLFilterRenderer {
 
         // 绘制
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+
+        // 可选：禁用顶点属性以清理状态
+        GLES20.glDisableVertexAttribArray(aPos)
+        GLES20.glDisableVertexAttribArray(aTex)
 
         // 交换缓冲区（输出到 Flutter Texture）
         EGL14.eglSwapBuffers(eglDisplay, eglSurface)
