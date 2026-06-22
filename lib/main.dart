@@ -294,14 +294,17 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   Future<void> _startCamera() async {
     if (_cameraOn) return;
     try {
+      // 先建立 EventChannel 监听，确保 native 侧 cameraSink 就绪后再启动相机
+      _cameraSub = _cameraChannel.receiveBroadcastStream().listen(_onCameraEvent);
       final textureId = await _methodChannel.invokeMethod<int>('startCameraStream') ?? -1;
       if (textureId < 0) {
+        await _cameraSub?.cancel();
+        _cameraSub = null;
         setState(() => _status = '相机启动失败');
         return;
       }
       _cameraOn = true;
       _cameraTextureId = textureId;
-      _cameraSub = _cameraChannel.receiveBroadcastStream().listen(_onCameraEvent);
       setState(() {});
     } on PlatformException catch (e) {
       debugPrint('startCamera error: $e');
