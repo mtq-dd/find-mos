@@ -496,40 +496,57 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
     private fun setTorch(on: Boolean) {
         try {
-            // 优先使用 startCameraStream 已打开的 cameraId，避免因 cameraId 与 torchCameraId
-            // 不一致导致 session 激活时 setTorchMode 无效的问题
-            val id = cameraId
-            if (id != null) {
-                val cm = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
-                if (cm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    cm.setTorchMode(id, on)
-                    CrashHandler.appendRuntime("Torch", "setTorch($id, $on) ok")
-                    return
-                }
+            // camera capture session 激活时，CameraManager.setTorchMode 会报 CAMERA_IN_USE
+            // 必须通过 CaptureRequest.FLASH_MODE 在 session 内部控制闪光灯
+            val session = captureSession
+            val camera = cameraDevice
+            if (session != null && camera != null) {
+                val requestBuilder = camera.createCaptureRequest(
+                    android.hardware.camera2.CameraDevice.TEMPLATE_PREVIEW,
+                )
+                requestBuilder.addTarget(previewSurface ?: return)
+                requestBuilder.addTarget(imageReader?.surface ?: return)
+                // 设置自动曝光模式
+                try {
+                    requestBuilder.set(
+                        android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE,
+                        android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE_ON,
+                    )
+                } catch (_: Throwable) {}
+                // 设置闪光灯模式：ON 强制开启，OFF 强制关闭
+                try {
+                    requestBuilder.set(
+                        android.hardware.camera2.CaptureRequest.FLASH_MODE,
+                        if (on) android.hardware.camera2.CaptureRequest.FLASH_MODE_TORCH
+                        else android.hardware.camera2.CaptureRequest.FLASH_MODE_OFF,
+                    )
+                } catch (_: Throwable) {}
+                session.setRepeatingRequest(requestBuilder.build(), null, cameraHandler)
+                CrashHandler.appendRuntime("Torch", "session setFlashMode $on ok")
+                return
             }
-            // fallback：重新查找后置摄像头（理论上不会走到这里）
+            // fallback：session 未激活时用 CameraManager
             val cm = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager ?: return
-            if (torchCameraId == null) {
+            val id = cameraId ?: run {
                 for (cid in cm.cameraIdList) {
                     val chars = cm.getCameraCharacteristics(cid)
                     val facing = chars.get(CameraCharacteristics.LENS_FACING) ?: continue
                     if (facing == CameraCharacteristics.LENS_FACING_BACK) {
-                        torchCameraId = cid
-                        break
+                        return@run cid
                     }
                 }
+                cm.cameraIdList.firstOrNull() ?: return
             }
-            val tid = torchCameraId ?: cm.cameraIdList.firstOrNull() ?: return
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                cm.setTorchMode(tid, on)
-                CrashHandler.appendRuntime("Torch", "setTorch fallback($tid, $on) ok")
+                cm.setTorchMode(id, on)
+                CrashHandler.appendRuntime("Torch", "fallback setTorchMode($id, $on) ok")
             }
         } catch (t: CameraAccessException) {
             Log.w(TAG, "torch access exception", t)
-            CrashHandler.appendRuntime("Torch", "setTorch error: $t")
+            CrashHandler.appendRuntime("Torch", "CAMERA_IN_USE error: $t")
         } catch (t: Throwable) {
             Log.w(TAG, "torch failed", t)
-            CrashHandler.appendRuntime("Torch", "setTorch error: $t")
+            CrashHandler.appendRuntime("Torch", "error: $t")
         }
     }
 

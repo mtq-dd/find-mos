@@ -16,6 +16,8 @@ class _FlightPoint {
 }
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
   runApp(const FindMosApp());
 }
 
