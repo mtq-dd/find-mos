@@ -320,6 +320,14 @@ class EGLFilterRenderer {
         // 更新输入纹理（相机帧 → OpenGL 纹理）
         inputSurfaceTexture?.updateTexImage()
 
+        // 如果 program 被删除（例如在 setter 切换滤镜时），在渲染线程/有 GL context 的时候尝试重新编译
+        if (program == 0) {
+            if (!compileProgram(filterMode)) {
+                Log.e("EGLFilter", "compileProgram failed in onFrameAvailable for filterMode=$filterMode")
+                return
+            }
+        }
+
         // 设置视口
         GLES20.glViewport(0, 0, width, height)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
