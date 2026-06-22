@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'motion.dart';
 import 'radar.dart';
@@ -185,6 +186,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   int _cameraFrameCount = 0;
   int _sensorOrientation = 0; // 摄像头传感器方向（度），0/90/180/270
   int _radarFrameCount = 0;
+  int _rotationAngle = 0; // 用户手动调整的画面旋转角度（0/90/180/270），持久化存储
 
   bool _pulse = false;
   Timer? _pulseTimer;
@@ -194,6 +196,7 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _loadRotationAngle();
     _startRadar();
     _startCamera();
   }
@@ -205,6 +208,40 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
     _stopCamera();
     _pulseTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _loadRotationAngle() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      setState(() {
+        _rotationAngle = prefs.getInt('rotationAngle') ?? 0;
+      });
+    } catch (e) {
+      debugPrint('loadRotationAngle error: $e');
+    }
+  }
+
+  Future<void> _saveRotationAngle(int angle) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('rotationAngle', angle);
+    } catch (e) {
+      debugPrint('saveRotationAngle error: $e');
+    }
+  }
+
+  void _rotateClockwise() {
+    setState(() {
+      _rotationAngle = (_rotationAngle + 90) % 360;
+    });
+    _saveRotationAngle(_rotationAngle);
+  }
+
+  void _rotateCounterClockwise() {
+    setState(() {
+      _rotationAngle = (_rotationAngle - 90 + 360) % 360;
+    });
+    _saveRotationAngle(_rotationAngle);
   }
 
   @override
@@ -630,9 +667,12 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
           children: [
             Positioned.fill(
               child: _cameraTextureId != null
-                  ? FittedBox(
-                      fit: BoxFit.cover,
-                      child: SizedBox(width: 1, height: 1, child: Texture(textureId: _cameraTextureId!)),
+                  ? Transform.rotate(
+                      angle: _rotationAngle * 3.141592653589793 / 180.0,
+                      child: FittedBox(
+                        fit: BoxFit.cover,
+                        child: SizedBox(width: 1, height: 1, child: Texture(textureId: _cameraTextureId!)),
+                      ),
                     )
                   : Container(
                       color: Colors.black,
@@ -767,6 +807,38 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
                         barColor: Colors.cyanAccent, barValue: _leftEnergy),
                     _statItem('R', _radarOn ? '${(_rightEnergy * 100).toStringAsFixed(0)}' : '--',
                         barColor: Colors.pinkAccent, barValue: _rightEnergy),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                // 画面旋转控制
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _ctrlButton(
+                      icon: Icons.rotate_left,
+                      label: '逆时针',
+                      on: false,
+                      onPressed: _rotateCounterClockwise,
+                      color: Colors.white70,
+                    ),
+                    const SizedBox(width: 16),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: Colors.white10,
+                        border: Border.all(color: Colors.white24),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Text('${_rotationAngle}°', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                    ),
+                    const SizedBox(width: 16),
+                    _ctrlButton(
+                      icon: Icons.rotate_right,
+                      label: '顺时针',
+                      on: false,
+                      onPressed: _rotateClockwise,
+                      color: Colors.white70,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 12),
