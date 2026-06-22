@@ -624,16 +624,19 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
         final scaleX = constraints.maxWidth / 100;
         final scaleY = constraints.maxHeight / 100;
         // sensorOrientation 通常为 90（后置摄像头），需要逆时针转 90 度才能在横屏 UI 中显示正常
-        // 旋转作用于整个 Stack，使轨迹层、运动框层与相机预览在同一旋转坐标系下对齐
+        // 相机纹理单独旋转；overlay 坐标与屏幕坐标系一致，无需旋转
         final needRotate = _sensorOrientation != 0;
         final radians = needRotate ? -_sensorOrientation * 3.141592653589793 / 180.0 : 0.0;
-        final overlay = Stack(
+        return Stack(
           children: [
             Positioned.fill(
               child: _cameraTextureId != null
-                  ? FittedBox(
-                      fit: BoxFit.contain,
-                      child: SizedBox(width: 1, height: 1, child: Texture(textureId: _cameraTextureId!)),
+                  ? Transform.rotate(
+                      angle: radians,
+                      child: FittedBox(
+                        fit: BoxFit.contain,
+                        child: SizedBox(width: 1, height: 1, child: Texture(textureId: _cameraTextureId!)),
+                      ),
                     )
                   : Container(
                       color: Colors.black,
@@ -667,15 +670,11 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
               ),
           ],
         );
-        if (needRotate) {
-          return Transform.rotate(angle: radians, child: overlay);
-        }
-        return overlay;
       },
     );
   }
 
-  // 控制面板 — 30% 透明背景，点击相机背景关闭
+  // 控制面板 — 30% 透明背景，点击相机背景或关闭按钮关闭
   Widget _buildControlPanel() {
     return Container(
       decoration: const BoxDecoration(
@@ -688,13 +687,32 @@ class _FindMosHomeState extends State<FindMosHome> with WidgetsBindingObserver {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // 拖拽指示条
-            Container(
-              margin: const EdgeInsets.only(top: 10),
-              width: 40, height: 4,
-              decoration: BoxDecoration(
-                color: Colors.white24,
-                borderRadius: BorderRadius.circular(2),
+            // 拖拽指示条 + 关闭按钮
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 40, height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.white24,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: () => setState(() => _controlPanelVisible = false),
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: Colors.white10,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(Icons.close, color: Colors.white54, size: 18),
+                    ),
+                  ),
+                ],
               ),
             ),
             Padding(
