@@ -5,6 +5,8 @@
 package com.example.mosqitoukiller
 
 import android.graphics.SurfaceTexture
+import android.os.Handler
+import android.os.HandlerThread
 import android.util.Log
 import android.opengl.EGL14
 import android.opengl.EGLConfig
@@ -126,6 +128,11 @@ class EGLFilterRenderer {
     var inputSurface: Surface? = null
         private set
 
+    // 专用渲染线程：所有 EGL/OpenGL 操作必须在该线程执行
+    private var renderThread: HandlerThread? = null
+    private var renderHandler: Handler? = null
+    private val renderRunnable = Runnable { doRenderFrame() }
+
     // 用于安全在渲染线程重建 program 的标志
     @Volatile
     private var needsRecreateProgram = false
@@ -174,12 +181,25 @@ class EGLFilterRenderer {
 
     /**
      * 初始化 EGL 和 OpenGL，创建输入 SurfaceTexture
-     * @param outputSurface 输出 Surface（Flutter Texture 的 Surface）
+     * 必须在渲染线程调用（由 startCameraStream 在相机线程通过 handler post）
      */
     fun init(outputSurface: Surface, w: Int, h: Int): Boolean {
         width = w
         height = h
 
+        // 在调用线程初始化 EGL（调用者必须是渲染线程）
+        val ok = initEGL(outputSurface)
+        if (!ok) return false
+
+        initialized = true
+        Log.i("EGLFilter", "EGL initialized ok on thread=${Thread.currentThread().name}, filterMode=$filterMode")
+        return true
+    }
+
+    /**
+     * 在渲染线程执行 EGL 初始化
+     */
+    private fun initEGL(outputSurface: Surface): Boolean {
         // 1. 获取 EGLDisplay
         eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
         if (eglDisplay == EGL14.EGL_NO_DISPLAY) {
@@ -238,11 +258,9 @@ class EGLFilterRenderer {
         }
 
         // 7. 创建 OpenGL 纹理（用于输入 SurfaceTexture）
-        // 使用外部纹理 target，因为 SurfaceTexture 通常对外部 OES 纹理进行更新（相机等）
         val textures = IntArray(1)
         GLES20.glGenTextures(1, textures, 0)
         inputTextureId = textures[0]
-        // 绑定到 GL_TEXTURE_EXTERNAL_OES
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, inputTextureId)
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
@@ -260,9 +278,38 @@ class EGLFilterRenderer {
             return false
         }
 
-        initialized = true
-        Log.i("EGLFilter", "EGL initialized ok, filterMode=$filterMode")
         return true
+    }
+
+    /**
+     * 启动专用渲染线程，所有 EGL/OpenGL 操作在该线程执行
+     * 必须先调用此方法，再调用 init()
+     */
+    fun startRenderThread(): Boolean {
+        renderThread = HandlerThread("EGLRender").also {
+            it.start()
+            renderHandler = Handler(it.looper)
+        }
+        CrashHandler.appendRuntime("EGL", "renderThread started: ${renderThread?.name}")
+        return true
+    }
+
+    /**
+     * 在渲染线程执行 init（通过 handler post）
+     */
+    fun initOnRenderThread(outputSurface: Surface, w: Int, h: Int): Boolean {
+        var result = false
+        val latch = java.util.concurrent.CountDownLatch(1)
+        renderHandler?.post {
+            result = init(outputSurface, w, h)
+            latch.countDown()
+        }
+        try {
+            latch.await()
+        } catch (e: InterruptedException) {
+            return false
+        }
+        return result
     }
 
     private fun compileProgram(mode: Int): Boolean {
@@ -325,23 +372,33 @@ class EGLFilterRenderer {
     private var renderFrameCount = 0
 
     /**
-     * 当有新相机帧时调用：把输入纹理处理后渲染到输出 Surface
+     * 当有新相机帧时调用：只发送信号到渲染线程，不做 GL 操作
      */
     fun onFrameAvailable() {
         if (!initialized) {
-            com.example.mosqitoukiller.CrashHandler.appendRuntime("EGL", "onFrameAvailable called but not initialized")
+            com.example.mosqitoukiller.CrashHandler.appendRuntime("EGL", "onFrameAvailable but not initialized")
             return
         }
+        // 将渲染任务 post 到渲染线程，避免跨线程调用 GL
+        renderHandler?.removeCallbacks(renderRunnable)
+        renderHandler?.post(renderRunnable)
+    }
+
+    /**
+     * 在渲染线程执行：读取相机帧 → GL 处理 → 输出到 Flutter Texture
+     */
+    private fun doRenderFrame() {
+        if (!initialized) return
         renderFrameCount++
 
-        // 绑定 EGL 上下文 —— 必须先绑定，updateTexImage() 需要当前的 GL context
+        // 绑定 EGL 上下文
         if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
-            com.example.mosqitoukiller.CrashHandler.appendRuntime("EGL", "eglMakeCurrent failed, frame=$renderFrameCount")
-            Log.e("EGLFilter", "eglMakeCurrent failed in onFrameAvailable")
+            com.example.mosqitoukiller.CrashHandler.appendRuntime("EGL", "eglMakeCurrent failed frame=$renderFrameCount")
             return
         }
+
         if (renderFrameCount == 1 || renderFrameCount == 30 || renderFrameCount % 100 == 0) {
-            com.example.mosqitoukiller.CrashHandler.appendRuntime("EGL", "rendering frame=$renderFrameCount, w=$width h=$height")
+            com.example.mosqitoukiller.CrashHandler.appendRuntime("EGL", "rendering frame=$renderFrameCount w=$width h=$height")
         }
 
         // 更新输入纹理（相机帧 → OpenGL 纹理）
@@ -354,7 +411,6 @@ class EGLFilterRenderer {
             if (program != 0) {
                 GLES20.glDeleteProgram(program)
                 program = 0
-                // reset cached locations
                 aPosLocation = -1
                 aTexLocation = -1
                 uTexLocation = -1
@@ -362,14 +418,13 @@ class EGLFilterRenderer {
             }
 
             if (!compileProgram(filterMode)) {
-                Log.e("EGLFilter", "Failed to compile program for filterMode=$filterMode")
+                com.example.mosqitoukiller.CrashHandler.appendRuntime("EGL", "compileProgram failed")
                 return
             }
         }
 
-        // 额外防御：如果 program 仍为 0，跳过绘制
         if (program == 0) {
-            Log.w("EGLFilter", "Skip frame: program == 0")
+            com.example.mosqitoukiller.CrashHandler.appendRuntime("EGL", "Skip frame: program == 0")
             return
         }
 
@@ -405,7 +460,7 @@ class EGLFilterRenderer {
         // 绘制
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
-        // 可选：禁用顶点属性以清理状态
+        // 禁用顶点属性
         GLES20.glDisableVertexAttribArray(aPos)
         GLES20.glDisableVertexAttribArray(aTex)
 
@@ -427,37 +482,56 @@ class EGLFilterRenderer {
 
     fun release() {
         initialized = false
-        if (program != 0) {
-            GLES20.glDeleteProgram(program)
-            program = 0
-        }
-        if (inputTextureId != 0) {
-            val tex = intArrayOf(inputTextureId)
-            GLES20.glDeleteTextures(1, tex, 0)
-            inputTextureId = 0
-        }
-        inputSurface?.release()
-        inputSurface = null
-        inputSurfaceTexture?.release()
-        inputSurfaceTexture = null
-        if (eglSurface != EGL14.EGL_NO_SURFACE) {
-            EGL14.eglDestroySurface(eglDisplay, eglSurface)
-            eglSurface = EGL14.EGL_NO_SURFACE
-        }
-        if (eglContext != EGL14.EGL_NO_CONTEXT) {
-            EGL14.eglDestroyContext(eglDisplay, eglContext)
-            eglContext = EGL14.EGL_NO_CONTEXT
-        }
-        if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
-            EGL14.eglTerminate(eglDisplay)
-            eglDisplay = EGL14.EGL_NO_DISPLAY
-        }
+        renderHandler?.removeCallbacks(renderRunnable)
+        renderThread?.quitSafely()
+        renderThread = null
+        renderHandler = null
 
-        // reset cached locations
+        // EGL 资源释放在渲染线程执行
+        releaseEGL()
+
         aPosLocation = -1
         aTexLocation = -1
         uTexLocation = -1
         uResLocation = -1
         needsRecreateProgram = false
+    }
+
+    private fun releaseEGL() {
+        if (program != 0) {
+            try {
+                GLES20.glDeleteProgram(program)
+            } catch (_: Throwable) {}
+            program = 0
+        }
+        if (inputTextureId != 0) {
+            try {
+                val tex = intArrayOf(inputTextureId)
+                GLES20.glDeleteTextures(1, tex, 0)
+            } catch (_: Throwable) {}
+            inputTextureId = 0
+        }
+        try { inputSurface?.release() } catch (_: Throwable) {}
+        inputSurface = null
+        try { inputSurfaceTexture?.release() } catch (_: Throwable) {}
+        inputSurfaceTexture = null
+        if (eglSurface != EGL14.EGL_NO_SURFACE) {
+            try {
+                EGL14.eglDestroySurface(eglDisplay, eglSurface)
+            } catch (_: Throwable) {}
+            eglSurface = EGL14.EGL_NO_SURFACE
+        }
+        if (eglContext != EGL14.EGL_NO_CONTEXT) {
+            try {
+                EGL14.eglDestroyContext(eglDisplay, eglContext)
+            } catch (_: Throwable) {}
+            eglContext = EGL14.EGL_NO_CONTEXT
+        }
+        if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+            try {
+                EGL14.eglTerminate(eglDisplay)
+            } catch (_: Throwable) {}
+            eglDisplay = EGL14.EGL_NO_DISPLAY
+        }
     }
 }

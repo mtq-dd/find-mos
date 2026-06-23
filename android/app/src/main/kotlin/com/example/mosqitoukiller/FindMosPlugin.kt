@@ -749,12 +749,15 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             previewSurface = android.view.Surface(st)
             // 初始化 EGL 滤镜渲染器（可选，失败不影响基本功能）
             val renderer = EGLFilterRenderer()
+            // 必须先启动专用渲染线程，再在该线程初始化 EGL（EGL 上下文不能跨线程）
+            renderer.startRenderThread()
             val outputSurface = android.view.Surface(st)
-            if (renderer.init(outputSurface, camNativeWidth, camNativeHeight)) {
+            if (renderer.initOnRenderThread(outputSurface, camNativeWidth, camNativeHeight)) {
                 eglFilterRenderer = renderer
-                CrashHandler.appendRuntime("Camera", "EGL filter init OK, filterMode=${renderer.filterMode}")
+                CrashHandler.appendRuntime("Camera", "EGL filter init OK on render thread, filterMode=${renderer.filterMode}")
             } else {
                 CrashHandler.appendRuntime("Camera", "EGL filter init FAILED, using fallback previewSurface")
+                renderer.release()
                 outputSurface.release()
                 // eglFilterRenderer 保持 null，previewSurface 已在上方创建好作为 fallback
             }
