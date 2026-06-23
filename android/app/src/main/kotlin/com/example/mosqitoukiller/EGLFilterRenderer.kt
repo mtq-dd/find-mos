@@ -482,13 +482,20 @@ class EGLFilterRenderer {
 
     fun release() {
         initialized = false
+        // 在渲染线程释放所有 GL/EGL 资源（GL 操作不能跨线程）
+        val latch = java.util.concurrent.CountDownLatch(1)
+        renderHandler?.post {
+            releaseEGL()
+            latch.countDown()
+        }
+        try {
+            latch.await(2, java.util.concurrent.TimeUnit.SECONDS)
+        } catch (e: InterruptedException) {}
+
         renderHandler?.removeCallbacks(renderRunnable)
         renderThread?.quitSafely()
         renderThread = null
         renderHandler = null
-
-        // EGL 资源释放在渲染线程执行
-        releaseEGL()
 
         aPosLocation = -1
         aTexLocation = -1
