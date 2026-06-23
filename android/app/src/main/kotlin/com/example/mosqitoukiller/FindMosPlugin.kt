@@ -739,18 +739,20 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             st.setDefaultBufferSize(camNativeWidth, camNativeHeight)
             textureEntry = entry
             surfaceTexture = st
-            // 创建输出 Surface（EGL 渲染目标 = Flutter Texture 的 Surface）
-            val outputSurface = android.view.Surface(st)
-            // 初始化 EGL 滤镜渲染器
+            // previewSurface 作为可靠 fallback：EGL 失败时相机仍能输出到显示 surface
+            previewSurface = android.view.Surface(st)
+            // 初始化 EGL 滤镜渲染器（可选，失败不影响基本功能）
             val renderer = EGLFilterRenderer()
+            val outputSurface = android.view.Surface(st)
             if (renderer.init(outputSurface, camNativeWidth, camNativeHeight)) {
                 eglFilterRenderer = renderer
-                Log.i(TAG, "EGLFilterRenderer initialized, inputSurface=${renderer.inputSurface}")
+                CrashHandler.appendRuntime("Camera", "EGL filter init OK, filterMode=${renderer.filterMode}")
             } else {
-                Log.w(TAG, "EGL init failed, will use original path")
+                CrashHandler.appendRuntime("Camera", "EGL filter init FAILED, using fallback previewSurface")
                 outputSurface.release()
+                // eglFilterRenderer 保持 null，previewSurface 已在上方创建好作为 fallback
             }
-            CrashHandler.appendRuntime("Camera", "SurfaceTextureEntry created, textureId=${entry.id()}")
+            CrashHandler.appendRuntime("Camera", "SurfaceTexture created, textureId=${entry.id()}, previewSurface=${previewSurface != null}")
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to create SurfaceTexture", t)
             CrashHandler.appendRuntime("Camera", "SurfaceTexture create failed: ${t.message}")
