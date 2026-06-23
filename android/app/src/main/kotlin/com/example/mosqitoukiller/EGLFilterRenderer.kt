@@ -322,16 +322,26 @@ class EGLFilterRenderer {
 
     // ==================== 渲染 ====================
 
+    private var renderFrameCount = 0
+
     /**
      * 当有新相机帧时调用：把输入纹理处理后渲染到输出 Surface
      */
     fun onFrameAvailable() {
-        if (!initialized) return
+        if (!initialized) {
+            com.example.mosqitoukiller.CrashHandler.appendRuntime("EGL", "onFrameAvailable called but not initialized")
+            return
+        }
+        renderFrameCount++
 
         // 绑定 EGL 上下文 —— 必须先绑定，updateTexImage() 需要当前的 GL context
         if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
+            com.example.mosqitoukiller.CrashHandler.appendRuntime("EGL", "eglMakeCurrent failed, frame=$renderFrameCount")
             Log.e("EGLFilter", "eglMakeCurrent failed in onFrameAvailable")
             return
+        }
+        if (renderFrameCount == 1 || renderFrameCount == 30 || renderFrameCount % 100 == 0) {
+            com.example.mosqitoukiller.CrashHandler.appendRuntime("EGL", "rendering frame=$renderFrameCount, w=$width h=$height")
         }
 
         // 更新输入纹理（相机帧 → OpenGL 纹理）
@@ -400,7 +410,17 @@ class EGLFilterRenderer {
         GLES20.glDisableVertexAttribArray(aTex)
 
         // 交换缓冲区（输出到 Flutter Texture）
-        EGL14.eglSwapBuffers(eglDisplay, eglSurface)
+        val swapResult = EGL14.eglSwapBuffers(eglDisplay, eglSurface)
+        if (!swapResult) {
+            val err = EGL14.eglGetError()
+            com.example.mosqitoukiller.CrashHandler.appendRuntime("EGL", "eglSwapBuffers failed err=$err, frame=$renderFrameCount")
+        } else if (renderFrameCount % 100 == 0) {
+            com.example.mosqitoukiller.CrashHandler.appendRuntime("EGL", "swapOK frame=$renderFrameCount")
+        }
+        val glErr = GLES20.glGetError()
+        if (glErr != GLES20.GL_NO_ERROR) {
+            com.example.mosqitoukiller.CrashHandler.appendRuntime("EGL", "glError=$glErr frame=$renderFrameCount")
+        }
     }
 
     // ==================== 释放 ====================

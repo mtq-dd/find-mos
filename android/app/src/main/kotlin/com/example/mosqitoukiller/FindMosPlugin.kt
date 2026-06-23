@@ -517,8 +517,14 @@ class FindMosPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 val requestBuilder = camera.createCaptureRequest(
                     android.hardware.camera2.CameraDevice.TEMPLATE_PREVIEW,
                 )
-                requestBuilder.addTarget(previewSurface ?: return)
-                requestBuilder.addTarget(imageReader?.surface ?: return)
+                // 添加当前 capture session 实际配置的 surface（保持一致，避免 unconfigured Surface 错误）
+                val eglInput = eglFilterRenderer?.inputSurface
+                if (eglInput != null) {
+                    requestBuilder.addTarget(eglInput)
+                } else {
+                    previewSurface?.let { requestBuilder.addTarget(it) }
+                }
+                imageReader?.surface?.let { requestBuilder.addTarget(it) }
                 // 设置自动曝光模式
                 try {
                     requestBuilder.set(
